@@ -15,6 +15,7 @@ import functools
 import itertools
 from typing import Any, List, NamedTuple, Optional, Union
 
+import jax
 from jax.ad_checkpoint import checkpoint_policies as jax_remat_policies
 
 from axlearn.common import causal_lm, config
@@ -37,6 +38,7 @@ from axlearn.common.decoder import LmHead
 from axlearn.common.embedding import TransformerTextEmbeddings
 from axlearn.common.flash_attention.layer import FlashBlockSizeModifier
 from axlearn.common.flash_attention.remat import save_or_offload_flash_attention_policy
+from axlearn.common.input_grain import DispatchConfig
 from axlearn.common.layers import RMSNorm
 from axlearn.common.trainer import SpmdTrainer
 from axlearn.common.trainer_config_modifier import (
@@ -341,7 +343,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=1),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -1083,7 +1085,7 @@ def trainer_configs(
                 )
                 config_map[f"{config_name}-fp8-single-host"] = make_single_host_fp8_config_func
 
-        if model_size in ("1B", "3B", "7B", "8B"):
+        if model_size in ("test", "1B", "3B", "7B", "8B"):
 
             def make_grain_config(base_config_name: str) -> SpmdTrainer.Config:
                 """Make a grain input processor variant of the base config.
@@ -1112,7 +1114,7 @@ def trainer_configs(
                 # pylint: disable=cell-var-from-loop
                 # Adjust batch size for grain processing if needed
                 for evaler in cfg.evalers.values():
-                    if hasattr(evaler.input, 'input_dispatcher'):
+                    if hasattr(evaler.input, "input_dispatcher"):
                         evaler.input.input_dispatcher.global_logical_batch_size //= (
                             64 if version in (Version.V3, Version.V3_TIKTOKEN) else 16
                         )
