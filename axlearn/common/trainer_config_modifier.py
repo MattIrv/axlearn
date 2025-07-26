@@ -5,7 +5,7 @@
 import json
 import logging
 import os
-from typing import Dict, Optional, Sequence, Union
+from typing import Callable, Dict, Optional, Sequence, Union
 
 from axlearn.common import config
 from axlearn.common import file_system as fs
@@ -21,6 +21,8 @@ from axlearn.common.config import (
     maybe_instantiate,
 )
 from axlearn.common.gradient_accumulation import with_minibatch_steps
+from axlearn.common.input_grain import Dataset
+from axlearn.common.input_grain_lm import windowed_packing
 from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.quantized_dot_general.layers import (
     DenseGeneralBaseLayer,

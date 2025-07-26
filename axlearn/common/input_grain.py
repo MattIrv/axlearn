@@ -52,6 +52,7 @@ from axlearn.common import input_base, utils
 from axlearn.common.config import (
     REQUIRED,
     ConfigOr,
+    InstantiableConfig,
     Required,
     config_class,
     config_for_class,
@@ -811,7 +812,7 @@ def mixture_train_input_source(
 
             # Construct ArrayRecord paths
             arrayrecord_dataset_dir = os.path.join(
-                "/tmp/gcsfuse/tensorflow_datasets/array_record", dataset_name
+                "/usr/local/google/home/mirvine/data/", dataset_name
             )
 
             # Use fs.listdir to list all files in the directory
@@ -819,9 +820,7 @@ def mixture_train_input_source(
 
             # Filter for arrayrecord files
             arrayrecord_files = [
-                os.path.join(arrayrecord_dataset_dir, f)
-                for f in all_files
-                if f.endswith(".arrayrecord")
+                os.path.join(arrayrecord_dataset_dir, f) for f in all_files if "array_record" in f
             ]
 
             # Create ArrayRecord dataset
