@@ -671,8 +671,6 @@ def get_trainer_config_fn(
         A function that returns a trainer config.
     """
 
-    del keep_every_n_steps
-
     def config_fn() -> InstantiableConfig:
         cfg: SpmdTrainer.Config = SpmdTrainer.default_config()
         cfg.name = "gpt_trainer"

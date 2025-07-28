@@ -218,7 +218,7 @@ class OrbaxCheckpointer(BaseCheckpointer):
     def __init__(self, cfg: Config, *, parent: Optional[Module]):
         super().__init__(cfg, parent=parent)
 
-        logging.set_verbosity(logging.DEBUG)
+        # logging.set_verbosity(logging.DEBUG)
         cfg: OrbaxCheckpointer.Config = self.config
         save_policy = cfg.save_policy.instantiate()
 
