@@ -329,16 +329,26 @@ def get_trainer_kwargs(
         )
     elif model_size == "1B":
         trainer_kwargs = dict(
-            model_kwargs=dict(
-                num_layers=16,
-                hidden_dim=2048,
-                num_heads=32,
-                num_kv_heads=num_kv_heads,
-                ffn_dim=8192,
+             model_kwargs=dict(
+                num_layers=4,
+                hidden_dim=8,
+                ffn_dim=scaled_hidden_dim(scale=8 / 3, round_up_to_multiples_of=16),
+                num_heads=4,
+                num_kv_heads=2,
                 rope_theta=rope_theta,
                 shared_lm_head=True,
                 flash_attention=flash_attention,
             ),
+            # model_kwargs=dict(
+            #     num_layers=16,
+            #     hidden_dim=2048,
+            #     num_heads=32,
+            #     num_kv_heads=num_kv_heads,
+            #     ffn_dim=8192,
+            #     rope_theta=rope_theta,
+            #     shared_lm_head=True,
+            #     flash_attention=flash_attention,
+            # ),
             learner_kwargs=dict(peak_lr=3e-4, weight_decay=0.1),
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
