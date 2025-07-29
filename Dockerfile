@@ -15,7 +15,7 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
     apt-get update -y && \
     apt-get install -y apt-transport-https ca-certificates gcc g++ \
-      git screen ca-certificates google-perftools google-cloud-cli python3.10-venv && apt clean -y
+    git screen ca-certificates google-perftools google-cloud-cli python3.10-venv && apt clean -y
 
 # Setup.
 RUN mkdir -p /root
@@ -88,7 +88,7 @@ ARG EXTRAS=
 ENV UV_FIND_LINKS=https://storage.googleapis.com/jax-releases/libtpu_releases.html
 # Ensure we install the TPU version, even if building locally.
 # Jax will fallback to CPU when run on a machine without TPU.
-COPY libtpu.so /root/libtpu.so
+#COPY libtpu.so /root/libtpu.so
 RUN uv pip install --prerelease=allow .[core,gcp,tpu] && uv cache clean
 RUN uv pip install libtpu==0.0.14
 

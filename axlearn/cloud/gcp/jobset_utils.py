@@ -32,6 +32,7 @@ from axlearn.cloud.gcp.utils import validate_jobset_name
 from axlearn.common.compiler_options import infer_tpu_type
 from axlearn.common.config import REQUIRED, Required, config_class
 from axlearn.common.utils import Nested
+import re
 
 # Set 80% of the max value as the requested memory.
 _MEMORY_REQUEST_PERCENTAGE = 0.8
@@ -294,7 +295,21 @@ class SingleReplicatedJob(BaseReplicatedJob):
         # pylint: disable=missing-kwoa
         # pytype: disable=missing-parameter
         if fv.gcsfuse_mount_spec:
-            cfg.gcsfuse_mount = GCSFuseMount(**parse_kv_flags(fv.gcsfuse_mount_spec, delimiter="="))
+            specs = []
+            # This regex splits by comma, but only if the comma is not inside double quotes.
+            quote_aware_splitter = re.compile(r',(?=(?:[^"]*"[^"]*")*[^"]*$)')
+            for spec_group in fv.gcsfuse_mount_spec:
+                specs.extend(quote_aware_splitter.split(spec_group))
+
+            # Parse the specs into a dictionary. This will preserve quotes in the values.
+            parsed_args = parse_kv_flags(specs, delimiter="=")
+
+            # If mount_options was parsed, remove the outer quotes from its value.
+            if "mount_options" in parsed_args:
+                parsed_args["mount_options"] = parsed_args["mount_options"].strip('"\'')
+
+            # Create the GCSFuseMount object with the cleaned arguments.
+            cfg.gcsfuse_mount = GCSFuseMount(**parsed_args)
         if fv.host_mount_spec:
             cfg.host_mounts = [
                 HostMount(**parse_kv_flags(item.split(","), delimiter="="))
@@ -567,6 +582,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
             # See https://cloud.google.com/storage/docs/cloud-storage-fuse/config-file for more
             # details about mountOptions.
             # The mountOptions are following https://github.com/AI-Hypercomputer/maxtext/pull/1070.
+            gcsMountOptions = f"only-dir={parsed.path.lstrip('/')},implicit-dirs,metadata-cache:ttl-secs:-1,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,kernel-list-cache-ttl-secs=-1,gcs-connection:http-client-timeout:{cfg.gcsfuse_mount.http_client_timeout}" or cfg.gcsfuse_mount.mount_options
             volumes.append(
                 dict(
                     name=cfg.gcsfuse_mount.name,
@@ -576,7 +592,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
                         volumeAttributes=dict(
                             bucketName=parsed.netloc,
                             # pylint: disable=line-too-long
-                            mountOptions=f"only-dir={parsed.path.lstrip('/')},implicit-dirs,metadata-cache:ttl-secs:-1,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,kernel-list-cache-ttl-secs=-1,gcs-connection:http-client-timeout:{cfg.gcsfuse_mount.http_client_timeout}",
+                            mountOptions=gcsMountOptions,
                             gcsfuseMetadataPrefetchOnMount="false",  # Improves first-time read.
                             disableMetrics="false",  # Enables GCSFuse metrics by default.
                         ),
