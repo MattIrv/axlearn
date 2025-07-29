@@ -822,7 +822,7 @@ def get_trainer_kwargs(
         model_parallelism = 4
         fsdp = 64
 
-        current_pdbs = 0.5
+        current_pdbs = 1
         train_batch_size = int(current_pdbs * len(jax.devices()))
 
         # 16 * (1024**2) / 4096 = 4096
@@ -845,7 +845,7 @@ def get_trainer_kwargs(
 
         # 1 / model_parallelism = 1 / 4 = 0.25
         min_pdbs = 1 / model_parallelism
-        max_pdbs = 1
+        max_pdbs = 2
 
         # More than 1 pdbs causes an OOM.
         assert current_pdbs < max_pdbs

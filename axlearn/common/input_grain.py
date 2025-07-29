@@ -779,8 +779,10 @@ def mixture_train_input_source(
     seed: Optional[int] = 42,
 ) -> BuildDatasetFn:
     """Build mixture training input source for decoder-only LM model using grain.
+
     Mixture sampling happens after input processing but before batching, meaning that each batch
     example will only contain tokens from a single source.
+
     Args:
         is_training: A boolean indicating that inputs will be used for training.
         vocab_cfg: Config to instantiate the seqio vocab.
@@ -793,6 +795,7 @@ def mixture_train_input_source(
         fake_input_source_cfg: A config that instantiates to a BuildDatasetFn for the input source
             used during unittest.
         seed: Seed for any downstream transformations (e.g. `shuffle` or `random_map`).
+
     Returns:
         A BuildDatasetFn that mixes the given list of DataMixtureComponent(s).
     """
@@ -800,17 +803,7 @@ def mixture_train_input_source(
 
     data_mixture_components = maybe_instantiate(data_mixture_components)
 
-    def build_dataset_fn(
-            dispatch_config: DispatchConfig,
-            *,
-            is_training: bool,
-            vocab_cfg: ConfigOr,
-            preprocessor: Union[ConfigOr, list[ConfigOr]],
-            data_mixture_components: Union[ConfigOr, list],
-            max_sequence_length: int,
-            replace_newlines_with: str = "<n>",
-            seed: Optional[int] = 42,
-        ) -> Dataset:
+    def build_dataset_fn(dispatch_config: DispatchConfig) -> Dataset:
         sources = []
         weights = []
 
@@ -827,15 +820,11 @@ def mixture_train_input_source(
 
             # Filter for arrayrecord files
             arrayrecord_files = [
-                os.path.join(arrayrecord_dataset_dir, f)
-                for f in all_files
-                if "array_record" in f
+                os.path.join(arrayrecord_dataset_dir, f) for f in all_files if "array_record" in f
             ]
 
             # Create ArrayRecord dataset
-            source_ds = (
-                array_record_dataset(paths=arrayrecord_files, seed=seed).shuffle().repeat()
-            )
+            source_ds = array_record_dataset(paths=arrayrecord_files, seed=seed).shuffle().repeat()
             source_ds = shard_dataset(source_ds, dispatch_config)
             #
             features_json = os.path.join(arrayrecord_dataset_dir, "features.json")
@@ -848,7 +837,6 @@ def mixture_train_input_source(
             with fs.open(features_json) as f:
                 features_dict = tfds.features.FeaturesDict.from_json(json.load(f))
             source_ds = source_ds.map(features_dict.deserialize_example_np)
-
 
             # Apply preprocessing
             def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
@@ -878,8 +866,7 @@ def mixture_train_input_source(
         # Mix the datasets
         mixed_ds = sample_from_datasets(sources=sources, weights=weights)
 
-        # Shard the mixed dataset.
-        # TODO: This needs to be per_device_batch_size, in the 150B case, this probably needs to be 0.5.
-        return mixed_ds.batch(0.5)
+        # Shard the mixed dataset
+        return mixed_ds.batch(4)
 
     return build_dataset_fn
