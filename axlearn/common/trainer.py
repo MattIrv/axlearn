@@ -574,8 +574,8 @@ class SpmdTrainer(Module):
             self._watchdog(),
             self.mesh(),
             jax.log_compiles(self.vlog_is_on(1)),
-            self._context_manager(),
-            self._recorder.maybe_monitor_all_goodput(),
+            # self._context_manager(),
+            # self._recorder.maybe_monitor_all_goodput(),
         ):
             cfg = self.config
             # Check if need to force run evals at the last training step.

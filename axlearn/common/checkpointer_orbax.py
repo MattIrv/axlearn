@@ -360,7 +360,7 @@ class OrbaxCheckpointer(BaseCheckpointer):
                 if cfg.enable_single_replica_ckpt_restoring:
                     pspec = x.sharding.spec
                     mesh = x.sharding.mesh
-                    replica_axis_index = 0
+                    replica_axis_index = 1
                     replica_devices = _replica_devices(mesh.devices, replica_axis_index)
                     replica_mesh = jax.sharding.Mesh(replica_devices, mesh.axis_names)
                     single_replica_sharding = jax.sharding.NamedSharding(replica_mesh, pspec)
