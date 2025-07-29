@@ -824,7 +824,7 @@ def get_trainer_kwargs(
         current_pdbs = 0.5
         train_batch_size = int(current_pdbs * len(jax.devices()))
 
-        # 16 * (1024**2) / 4096 = 4096
+        # 16k * 4096 = 64M
         tokens_per_batch = int(train_batch_size * max_sequence_length)
 
         # 32M tokens is the max global tokens we can train on.
@@ -832,11 +832,11 @@ def get_trainer_kwargs(
         if tokens_per_batch > 32 * (1024**2):
             tokens_per_batch = 32 * (1024**2)
             # if we want to modify the pdbs:
-            # current_pdbs = 0.25
+            current_pdbs = 0.25
 
             # otherwise we can modify the model sharding.
-            model_parallelism = 8
-            fsdp = 32
+            # model_parallelism = 8
+            # fsdp = 32
 
         # 32M tokens is the max global tokens we can train on.
         assert tokens_per_batch <= 32 * (1024**2)
@@ -891,7 +891,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=100_000,  # max_step,
-            save_every_n_steps=100,
+            save_every_n_steps=20,
             mesh_shape=mesh_shape_from_axes(data=-1, fsdp=fsdp, model=model_parallelism),
             mesh_rules=(
                 (
