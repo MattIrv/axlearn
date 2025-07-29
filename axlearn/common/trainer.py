@@ -1098,7 +1098,23 @@ class SpmdTrainer(Module):
                 trainer_state=self.trainer_state, input_batch=input_batch, with_xsc=run_with_xsc
             )
             # Run the compiled function.
-            self._trainer_state, outputs = compiled_train_step_fn(self.trainer_state, input_batch)
+            # self._trainer_state, outputs = compiled_train_step_fn(self.trainer_state, input_batch)
+            time.sleep(1.1)
+            forward_outputs = ForwardOutputs(
+                loss=jax.numpy.float32(10.0),
+                aux=jax.numpy.float32(10.0),
+                output_collection=new_output_collection(),
+            )
+            summaries = dict(
+                model=None,
+                learner=None,
+            )
+            outputs = dict(
+                summaries=summaries,
+                loss=forward_outputs.loss,
+                aux=forward_outputs.aux,
+            )
+            # outputs = {"loss": 0.0, "aux": 0.0, "summaries": {}}
 
         if self.step % 100 == 0 or 0 <= self.step <= 5:
             self._step_log(
@@ -1107,11 +1123,12 @@ class SpmdTrainer(Module):
                 jax.tree.map(lambda x: x.item() if x.ndim == 0 else f"T{x.shape}", outputs["aux"]),
             )
 
-        self.summary_writer(self.step, {"loss": outputs["loss"], **outputs["summaries"]})
+        # self.summary_writer(self.step, {"loss": outputs["loss"], **outputs["summaries"]})
         # Aggregate summaries across evalers.
-        evaler_summaries = self._run_eval(
-            train_summaries=outputs["summaries"], force_runs=force_run_evals
-        )
+        # evaler_summaries = self._run_eval(
+        #     train_summaries=outputs["summaries"], force_runs=force_run_evals
+        # )
+        evaler_summaries = {}
 
         # Checkpointer policy will decide if we should save.
         self.save_checkpoint(evaler_summaries=evaler_summaries)
