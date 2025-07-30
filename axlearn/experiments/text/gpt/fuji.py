@@ -832,11 +832,11 @@ def get_trainer_kwargs(
         if tokens_per_batch > 32 * (1024**2):
             tokens_per_batch = 32 * (1024**2)
             # if we want to modify the pdbs:
-            # current_pdbs = 0.25
+            current_pdbs = 0.25
 
             # otherwise we can modify the model sharding.
-            model_parallelism = 8
-            fsdp = 32
+            #model_parallelism = 8
+            #fsdp = 32
 
         # 32M tokens is the max global tokens we can train on.
         assert tokens_per_batch <= 32 * (1024**2)
