@@ -199,7 +199,7 @@ class OrbaxCheckpointer(BaseCheckpointer):
         keep_last_n: int = 1
         keep_every_n_steps: Optional[int] = None
         validation_type: CheckpointValidationType = CheckpointValidationType.EXACT
-        async_timeout_secs: int = 300
+        async_timeout_secs: int = 500
         max_concurrent_save_gb: Optional[int] = None
         max_concurrent_restore_gb: Optional[int] = None
         enable_single_replica_ckpt_restoring: bool = True
