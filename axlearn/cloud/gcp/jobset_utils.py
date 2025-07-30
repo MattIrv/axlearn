@@ -595,6 +595,7 @@ class TPUReplicatedJob(SingleReplicatedJob):
                             mountOptions=gcsMountOptions,
                             gcsfuseMetadataPrefetchOnMount="false",  # Improves first-time read.
                             disableMetrics="false",  # Enables GCSFuse metrics by default.
+                            skipCSIBucketAccessCheck="true", # Disable access check to mitigate the 429 STS issue.
                         ),
                     ),
                 )
