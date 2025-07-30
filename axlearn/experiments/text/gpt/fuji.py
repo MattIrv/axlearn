@@ -891,7 +891,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=100_000,  # max_step,
-            save_every_n_steps=100,
+            save_every_n_steps=20,
             mesh_shape=mesh_shape_from_axes(data=-1, fsdp=fsdp, model=model_parallelism),
             mesh_rules=(
                 (
