@@ -11,7 +11,7 @@
 # Check if a pod prefix was passed as an argument
 if [ -z "$1" ]; then
     echo "Usage: $0 <pod-prefix>"
-    echo "Please provide the jobset name as the pod prefix to identify the target pods."
+    echo "Please provide a prefix to identify the target pods."
     exit 1
 fi
 
@@ -19,11 +19,8 @@ fi
 POD_PREFIX="$1"
 
 # Set your GCP Project ID and Zone here
-# GCP_PROJECT_ID="cloud-tpu-best-effort-colo"
-# GCP_ZONE="us-east5-a"
-
-GCP_PROJECT_ID="tpu-prod-env-one-vm"
-GCP_ZONE="southamerica-west1-a"
+GCP_PROJECT_ID="cloud-tpu-best-effort-colo"
+GCP_ZONE="us-east5-a"
 
 # Log file path
 LOG_FILE="./disrupt_nodes.log"
@@ -69,7 +66,10 @@ while true; do
             log "Attempting to delete GCE instance: ${NODE_NAME} in zone ${GCP_ZONE}"
 
             # The --quiet flag suppresses the interactive confirmation prompt.
-            kubectl exec -it ${POD_NAME} -c ${POD_PREFIX} -- sh -c "kill -s SIGILL 1" 2>&1 | tee -a "${LOG_FILE}"
+            gcloud compute instances delete "${NODE_NAME}" \
+                --zone="${GCP_ZONE}" \
+                --project="${GCP_PROJECT_ID}" \
+                --quiet 2>&1 | tee -a "${LOG_FILE}"
 
             # Check the exit code of the gcloud command
             if [ ${PIPESTATUS[0]} -eq 0 ]; then

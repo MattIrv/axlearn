@@ -185,10 +185,6 @@ def default_xla_options(
                 "megachip_tccontrol",
                 "10m",
                 "60m",
-                "100s",
-                "120s",
-                "3600s",
-                "5m",
                 "/output/rapideye/",
             ], (k, v)
 
