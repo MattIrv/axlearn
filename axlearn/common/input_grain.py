@@ -866,7 +866,17 @@ def mixture_train_input_source(
         # Mix the datasets
         mixed_ds = sample_from_datasets(sources=sources, weights=weights)
 
+        mixed_ds = mixed_ds.batch(4)
+
+        # # Enable prefetching
+        # mixed_ds = prefetch_dataset(
+        #     mixed_ds,
+        #     multiprocessing_options=grain.MultiprocessingOptions(
+        #         num_workers=4,
+        #     ),
+        # )
+
         # Shard the mixed dataset
-        return mixed_ds.batch(4)
+        return mixed_ds
 
     return build_dataset_fn
