@@ -1,10 +1,12 @@
 # Modify these
-export NUM_REPLICAS=32;
-export NAME=${USER}-pygrain-test-0801-8;
+export NUM_REPLICAS=4;
+export USER=deepikarajani;
+# export NAME=deepikarajani-pygrain-orbax-hns-8-re;
+export NAME=deepikarajani-pygrain-orbax-hns-8-0804-4pod;
 
 # Keep these
-export OUTPUT_DIR=gs://tess-checkpoints-us-east5/$USER/$NAME
-export DATASET_BUCKET=gs://tess-dataloading-us-east5
+export OUTPUT_DIR=gs://scale-test-checkpointing-useast4/$USER/$NAME
+export DATASET_BUCKET=gs://scale-test-dataloading-useast4
 export GKE_CLUSTER=$(axlearn gcp config | grep gke_cluster | awk '{ print $3 }' | tr -d '"')
 export PROJECT_ID=$(gcloud config get project)
 export BASTION_TIER=disabled
@@ -22,9 +24,9 @@ axlearn gcp launch run --cluster=${GKE_CLUSTER} \
         --instance_type=tpu-v6e-256 \
         --max_tries=100 \
         --priority_class=very-high \
-        --service_account=axlearn-scale-testing \
+        --service_account=default \
         --num_replicas=$NUM_REPLICAS \
-	    --gcsfuse_mount_spec=gcs_path=${DATASET_BUCKET}/tensorflow_datasets,mount_path=/tmp/tensorflow_datasets \
+	--gcsfuse_mount_spec=gcs_path=${DATASET_BUCKET}/tensorflow_datasets,mount_path=/tmp/tensorflow_datasets \
         --bundler_spec=allow_dirty=True \
         --bundler_type=artifactregistry --bundler_spec=image=tpu \
         --bundler_spec=dockerfile=Dockerfile --bundler_spec=target=tpu \

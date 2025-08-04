@@ -1,6 +1,6 @@
 # Modify these
 export NUM_REPLICAS=2;
-export NAME=${USER}-pygrain-test-0801-9;
+export NAME=${USER}-pygrain-test-0802-1;
 
 # Keep these
 export OUTPUT_DIR=gs://hns-largescale-axlearn-testing/$USER/$NAME

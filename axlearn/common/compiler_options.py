@@ -155,10 +155,10 @@ def default_xla_options(
             # Similar to megascale_error_reporter_abort_on_hang but for unrecoverable errors.
             megascale_error_reporter_abort_on_error="true",
             # Increase the timeout at which a hang is detected/reported, default is 5m.
-            megascale_graph_hang_threshold="60m",
+            megascale_graph_hang_threshold="10m",
             # Similar to megascale_graph_hang_threshold but specific to within a launch_id.
             # Default is 1m.
-            megascale_graph_within_launch_hang_threshold="60m",
+            megascale_graph_within_launch_hang_threshold="10m",
             # TODO(ethanli): temporary workaround to avoid memory leak in megascale.
             megascale_grpc_enable_xor_tracer="false",
             # # The duration of missing heartbeats before shutting down.
