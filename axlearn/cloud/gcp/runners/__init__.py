@@ -12,6 +12,7 @@ from axlearn.cloud.gcp.jobset_utils import (
     A3MegaReplicatedJob,
     A3UltraReplicatedJob,
     A4HighReplicatedJob,
+    CPUReplicatedJob,
     TPUReplicatedJob,
 )
 from axlearn.cloud.gcp.node_pool_provisioner import TPUNodePoolProvisioner
@@ -48,6 +49,11 @@ def named_runner_configs(
         "gke_tpu_pathways_multihead": GKERunnerJob.default_config().set(
             inner=GKEPathwaysJobSet.default_config().set(
                 builder=PathwaysMultiheadReplicatedJob.default_config()
+            ),
+        ),
+        "gke_cpu_single": GKERunnerJob.default_config().set(
+            inner=GKEJob.default_config().set(
+                builder=CPUReplicatedJob.default_config(),
             ),
         ),
     }
