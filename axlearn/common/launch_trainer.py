@@ -69,6 +69,13 @@ flags.DEFINE_string(
     None,
     "The mesh selector string. See `SpmdTrainer.Config.mesh_rules` for details.",
 )
+flags.DEFINE_multi_string(
+    "config_args",
+    [],
+    "Arguments to pass to the config function. "
+    "Each argument should be in the format key=value. "
+    "Values are parsed as JSON if possible, otherwise as strings.",
+)
 
 FLAGS = flags.FLAGS
 
@@ -99,7 +106,20 @@ def get_trainer_config(
             flag_values.config,
             config_module=f"axlearn.experiments.{flag_values.config_module}",
         )
-    trainer_config: SpmdTrainer.Config = trainer_config_fn()
+
+    # Parse config_args.
+    config_kwargs = {}
+    for kv in flag_values.config_args:
+        if "=" not in kv:
+            raise ValueError(f"Invalid config_arg: {kv}. Must be in key=value format.")
+        k, v = kv.split("=", 1)
+        try:
+            v = json.loads(v)
+        except json.JSONDecodeError:
+            pass
+        config_kwargs[k] = v
+
+    trainer_config: SpmdTrainer.Config = trainer_config_fn(**config_kwargs)
     trainer_config.dir = trainer_config.dir or flag_values.trainer_dir
     if flag_values.mesh_selector is not None:
         select_mesh_config(trainer_config, mesh_selector=flag_values.mesh_selector)

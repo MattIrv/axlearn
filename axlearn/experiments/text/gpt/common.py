@@ -644,6 +644,7 @@ def get_trainer_config_fn(
     keep_every_n_steps: int = 50_000,
     save_every_n_steps: Optional[int] = None,
     init_state_builder: Optional[state_builder.Builder.Config] = None,
+    trainer_cls: type[SpmdTrainer] = SpmdTrainer,
 ) -> TrainerConfigFn:
     """Builds a TrainerConfigFn according to the model and input specs.
 
@@ -672,7 +673,7 @@ def get_trainer_config_fn(
     """
 
     def config_fn() -> InstantiableConfig:
-        cfg: SpmdTrainer.Config = SpmdTrainer.default_config()
+        cfg: SpmdTrainer.Config = trainer_cls.default_config()
         cfg.name = "gpt_trainer"
         cfg.model = model_cfg
         cfg.learner = learner_cfg
