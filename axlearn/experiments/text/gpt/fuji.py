@@ -35,6 +35,7 @@ from axlearn.common.base_layer import RematSpec
 from axlearn.common.config import TrainerConfigFn, config_for_function
 from axlearn.common.decoder import LmHead
 from axlearn.common.embedding import TransformerTextEmbeddings
+from axlearn.common.emulation_trainer import SleepTrainer
 from axlearn.common.flash_attention.layer import FlashBlockSizeModifier
 from axlearn.common.flash_attention.remat import save_or_offload_flash_attention_policy
 from axlearn.common.layers import RMSNorm
@@ -1129,5 +1130,30 @@ def trainer_configs(
                     make_single_host_config, f"{config_name}-fp8"
                 )
                 config_map[f"{config_name}-fp8-single-host"] = make_single_host_fp8_config_func
+
+        # Make sleep config.
+        sleep_config_name = f"{config_name}-sleep"
+        # pylint: disable-next=unexpected-keyword-arg,missing-kwoa
+        base_sleep_config_fn = get_trainer_config_fn(
+            train_input_source=train_input_source(
+                vocab_size=vocab_size,
+                max_sequence_length=max_sequence_length,
+            ),
+            # Clear evalers to avoid needing vocab files for eval.
+            evalers={},
+            trainer_cls=SleepTrainer,
+            **kwargs,
+        )
+
+        def set_sleep_seconds(
+            sleep_seconds: float = 1.0,
+            *,
+            base_cfg_fn: TrainerConfigFn = base_sleep_config_fn,
+        ) -> SleepTrainer.Config:
+            cfg: SleepTrainer.Config = base_cfg_fn()
+            cfg.sleep_seconds = sleep_seconds
+            return cfg
+
+        config_map[sleep_config_name] = set_sleep_seconds
 
     return config_map
