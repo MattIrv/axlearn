@@ -628,8 +628,20 @@ class TPUJobBuilder(SingleReplicatedJob):
                     readOnly=cfg.gcsfuse_mount.read_only,
                     volumeAttributes=dict(
                         bucketName=parsed.netloc,
-                        # pylint: disable=line-too-long
-                        mountOptions=f"only-dir={parsed.path.lstrip('/')},implicit-dirs,metadata-cache:ttl-secs:-1,metadata-cache:stat-cache-max-size-mb:-1,metadata-cache:type-cache-max-size-mb:-1,kernel-list-cache-ttl-secs=-1,gcs-connection:http-client-timeout:{cfg.gcsfuse_mount.http_client_timeout}",
+                        mountOptions=",".join(
+                            [
+                                f"only-dir={parsed.path.lstrip(" / ")}",
+                                "implicit-dirs",
+                                "metadata-cache:ttl-secs:-1",
+                                "metadata-cache:stat-cache-max-size-mb:-1",
+                                "metadata-cache:type-cache-max-size-mb:-1",
+                                "kernel-list-cache-ttl-secs=-1",
+                                (
+                                    "gcs-connection:http-client-timeout:"
+                                    f"{cfg.gcsfuse_mount.http_client_timeout}"
+                                ),
+                            ]
+                        ),
                         gcsfuseMetadataPrefetchOnMount="false",  # Improves first-time read.
                         disableMetrics="false",  # Enables GCSFuse metrics by default.
                     ),
@@ -1566,4 +1578,217 @@ class A4HighReplicatedJob(GPUReplicatedJob):
                 "name": "gib",
                 "hostPath": {"path": "/home/kubernetes/bin/gib"},
             },
+        ]
+
+
+class CPUReplicatedJob(SingleReplicatedJob):
+    """Builds a replicated job spec for a CPU job to be used with the JobSet API."""
+
+    Config = SingleReplicatedJob.Config
+
+    def __init__(self, cfg: Config, *, bundler: Bundler):
+        super().__init__(cfg, bundler=bundler)
+        self._output_volume_mount = dict(name="shared-output", mountPath="/output")
+        self._load_balancer = _LoadBalancer(jobset_name=cfg.name, replicated_job_name=cfg.job_name)
+
+    def _maybe_add_volume_mount(self, volume_mounts: list[dict], *, spec: Optional[VolumeMount]):
+        if spec:
+            volume_mounts.append(
+                dict(name=spec.name, mountPath=spec.mount_path, readOnly=spec.read_only)
+            )
+
+    def _build_uploader_container(
+        self, src: str = "/output", output_volume_mount: Optional[dict] = None
+    ) -> Nested[Any]:
+        """Builds a config for the uploader container which sync logs to the output dir."""
+        cfg: CPUReplicatedJob.Config = self.config
+        output_volume_mount = output_volume_mount or self._output_volume_mount
+        if not cfg.output_dir:
+            return {}
+
+        dst = f"{cfg.output_dir}/output/$HOSTNAME/"
+        interval_s = 60
+        sync_command = f"while true; do gsutil -m rsync -r {src} {dst}; sleep {interval_s}; done"
+        resources = {
+            "requests": {"cpu": "100m", "memory": "128Mi"},
+            "limits": {"cpu": "500m", "memory": "256Mi"},
+        }
+        return dict(
+            name="output-uploader",
+            image="google/cloud-sdk:alpine",
+            restartPolicy="Always",
+            command=["/bin/sh", "-c"],
+            args=[sync_command],
+            resources=resources,
+            volumeMounts=[output_volume_mount],
+        )
+
+    def _build_shared_memory_volumes(self, shared_memory: str) -> Nested[Any]:
+        return {
+            "name": "shared-memory",
+            "emptyDir": {"medium": "Memory", "sizeLimit": shared_memory},
+        }
+
+    def set_up_gcsfuse(
+        self, cfg: "CPUReplicatedJob.Config", volumes: list, annotations: dict
+    ) -> None:
+        """Sets up GCSFuse volumes and annotations."""
+        volumes.append(self._build_shared_memory_volumes(cfg.gcsfuse_mount.shared_memory))
+        annotations.update(
+            {
+                "gke-gcsfuse/volumes": "true",
+                "gke-gcsfuse/cpu-request": cfg.gcsfuse_mount.cpu,
+                "gke-gcsfuse/memory-request": cfg.gcsfuse_mount.memory,
+                "gke-gcsfuse/ephemeral-storage-request": cfg.gcsfuse_mount.ephemeral_gb,
+                "gke-gcsfuse/cpu-limit": "0",
+                "gke-gcsfuse/memory-limit": "0",
+                "gke-gcsfuse/ephemeral-storage-limit": "0",
+            }
+        )
+        parsed = urlparse(cfg.gcsfuse_mount.gcs_path)
+        volumes.append(
+            dict(
+                name=cfg.gcsfuse_mount.name,
+                csi=dict(
+                    driver="gcsfuse.csi.storage.gke.io",
+                    readOnly=cfg.gcsfuse_mount.read_only,
+                    volumeAttributes=dict(
+                        bucketName=parsed.netloc,
+                        mountOptions=",".join(
+                            [
+                                f"only-dir={parsed.path.lstrip(" / ")}",
+                                "implicit-dirs",
+                                "metadata-cache:ttl-secs:-1",
+                                "metadata-cache:stat-cache-max-size-mb:-1",
+                                "metadata-cache:type-cache-max-size-mb:-1",
+                                "kernel-list-cache-ttl-secs=-1",
+                                (
+                                    "gcs-connection:http-client-timeout:"
+                                    f"{cfg.gcsfuse_mount.http_client_timeout}"
+                                ),
+                            ]
+                        ),
+                        gcsfuseMetadataPrefetchOnMount="false",
+                        disableMetrics="false",
+                    ),
+                ),
+            )
+        )
+
+    def _build_container(self) -> Nested[Any]:
+        """Builds a config for a single container."""
+        cfg: CPUReplicatedJob.Config = self.config
+        volume_mounts = [self._output_volume_mount]
+
+        if cfg.gcsfuse_mount:
+            self._maybe_add_volume_mount(volume_mounts, spec=cfg.gcsfuse_mount)
+            self._maybe_add_volume_mount(
+                volume_mounts, spec=VolumeMount(name="shared-memory", mount_path="/dev/shm")
+            )
+
+        if cfg.host_mounts:
+            for mount in cfg.host_mounts:
+                self._maybe_add_volume_mount(volume_mounts, spec=mount)
+
+        env_vars = {**cfg.env_vars}
+
+        # Set up distributed coordination environment variables
+        if cfg.accelerator.num_replicas > 1:
+            env_vars["DISTRIBUTED_COORDINATOR"] = f"{cfg.name}-{cfg.job_name}-0-0.{cfg.name}:8080"
+            env_vars["NUM_PROCESSES"] = str(cfg.accelerator.num_replicas)
+
+        k8s_env_vars = [dict(name=k, value=str(v)) for k, v in env_vars.items()]
+        k8s_env_vars.append(
+            {"name": "NODE_IP", "valueFrom": {"fieldRef": {"fieldPath": "status.hostIP"}}}
+        )
+        k8s_env_vars.append(
+            {"name": "NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}}
+        )
+
+        # Add PROCESS_ID for distributed jobs
+        if cfg.accelerator.num_replicas > 1:
+            k8s_env_vars.append(
+                {
+                    "name": "PROCESS_ID",
+                    "valueFrom": {
+                        "fieldRef": {
+                            "fieldPath": (
+                                "metadata.annotations['batch.kubernetes.io/job-completion-index']"
+                            ),
+                        }
+                    },
+                },
+            )
+
+        resources = {}
+
+        return dict(
+            name=cfg.name,
+            image=cfg.image_id or self._bundler.id(cfg.name),
+            ports=[
+                dict(containerPort=self._load_balancer.target_port),
+            ],
+            command=["bash", "-c", cfg.command],
+            resources=resources,
+            env=k8s_env_vars,
+            volumeMounts=volume_mounts,
+            imagePullPolicy="Always",
+        )
+
+    def _build_pod(self) -> Nested[Any]:
+        cfg: CPUReplicatedJob.Config = self.config
+        annotations, labels, selector, volumes, tolerations = {}, {}, {}, [], []
+
+        volumes.append(dict(name="shared-output", emptyDir={}))
+        if cfg.gcsfuse_mount:
+            self.set_up_gcsfuse(cfg, volumes, annotations)
+        if cfg.host_mounts:
+            for mount in cfg.host_mounts:
+                volumes.append(
+                    dict(
+                        name=mount.name,
+                        hostPath=dict(path=mount.host_path, type=mount.type),
+                    )
+                )
+
+        selector.update({"node.kubernetes.io/instance-type": "n2-standard-64"})
+
+        containers = [self._build_container()]
+        init_containers = []
+        if cfg.output_dir:
+            init_containers.append(self._build_uploader_container())
+
+        spec = dict(
+            terminationGracePeriodSeconds=60,
+            restartPolicy="Never",
+            nodeSelector=selector,
+            tolerations=tolerations,
+            containers=containers,
+            initContainers=init_containers,
+            serviceAccountName=cfg.service_account,
+            volumes=volumes,
+        )
+
+        return dict(
+            metadata=dict(annotations=annotations, labels=labels),
+            spec=spec,
+        )
+
+    def __call__(self) -> Sequence[Nested[Any]]:
+        cfg: CPUReplicatedJob.Config = self.config
+        job_spec = dict(
+            metadata=dict(annotations=self._load_balancer.metadata),
+            spec=dict(
+                parallelism=cfg.accelerator.num_replicas,
+                completions=cfg.accelerator.num_replicas,
+                backoffLimit=0,  # Fail the job if any node fails. Retries happen at JobSet level.
+                template=self._build_pod(),
+            ),
+        )
+        return [
+            dict(
+                name=cfg.job_name,
+                replicas=1,
+                template=job_spec,
+            )
         ]

@@ -35,6 +35,7 @@ from axlearn.common.base_layer import RematSpec
 from axlearn.common.config import TrainerConfigFn, config_for_function
 from axlearn.common.decoder import LmHead
 from axlearn.common.embedding import TransformerTextEmbeddings
+from axlearn.common.emulation_trainer import SleepTrainer
 from axlearn.common.flash_attention.layer import FlashBlockSizeModifier
 from axlearn.common.flash_attention.remat import save_or_offload_flash_attention_policy
 from axlearn.common.layers import RMSNorm
@@ -43,6 +44,7 @@ from axlearn.common.trainer_config_modifier import (
     ChainConfigModifier,
     FP8ConfigModifier,
     GradientAccumulationModifier,
+    GrainConfigModifier,
     MeshShapeModifier,
     ModuleConfigModifier,
     PartitionSpecModifier,
@@ -1130,4 +1132,58 @@ def trainer_configs(
                 )
                 config_map[f"{config_name}-fp8-single-host"] = make_single_host_fp8_config_func
 
+        # Make sleep config.
+        sleep_config_name = f"{config_name}-sleep"
+        # pylint: disable-next=unexpected-keyword-arg,missing-kwoa
+        base_sleep_config_fn = get_trainer_config_fn(
+            train_input_source=train_input_source(
+                vocab_size=vocab_size,
+                max_sequence_length=max_sequence_length,
+            ),
+            # Clear evalers to avoid needing vocab files for eval.
+            evalers={},
+            trainer_cls=SleepTrainer,
+            **kwargs,
+        )
+
+        def set_sleep_seconds(
+            sleep_seconds: float = 1.0,
+            *,
+            base_cfg_fn: TrainerConfigFn = base_sleep_config_fn,
+        ) -> SleepTrainer.Config:
+            cfg: SleepTrainer.Config = base_cfg_fn()
+            cfg.sleep_seconds = sleep_seconds
+            return cfg
+
+        config_map[sleep_config_name] = set_sleep_seconds
+
+    grain_config_map = {}
+    for config_name in config_map:
+
+        def make_grain_config(base_config_name: str) -> SpmdTrainer.Config:
+            """Make a grain input processor variant of the base config.
+            This configuration uses the grain input processing framework for
+            improved data loading and preprocessing performance.
+            Args:
+                base_config_name: The base config name.
+            Returns:
+                A trainer config that uses grain input processing.
+            """
+
+            # pytype: disable=annotation-type-mismatch
+            cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
+            # pytype: enable=annotation-type-mismatch
+
+            # Apply grain config modifier to convert tf.data to Grain
+            grain_modifier = GrainConfigModifier.default_config().set(
+                convert_training_input=True,
+            )
+            cfg = grain_modifier.instantiate()(cfg)
+            return cfg
+
+        # Make grain config
+        make_grain_config_func = functools.partial(make_grain_config, config_name)
+        grain_config_map[f"{config_name}-grain"] = make_grain_config_func
+
+    config_map.update(grain_config_map)
     return config_map

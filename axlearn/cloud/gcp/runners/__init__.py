@@ -17,6 +17,7 @@ from axlearn.cloud.gcp.jobset_utils import (
     A3MegaReplicatedJob,
     A3UltraReplicatedJob,
     A4HighReplicatedJob,
+    CPUReplicatedJob,
     TPUReplicatedJob,
 )
 from axlearn.cloud.gcp.k8s_service import LWSService
@@ -67,6 +68,11 @@ def named_runner_configs(
                 service=LWSService.default_config(),
             ),
             pre_provisioner=TPUNodePoolProvisioner.default_config(),
+        ),
+        "gke_cpu_single": GKERunnerJob.default_config().set(
+            inner=GKEJob.default_config().set(
+                builder=CPUReplicatedJob.default_config(),
+            ),
         ),
     }
 
