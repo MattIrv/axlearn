@@ -5,6 +5,7 @@
 import copy
 from functools import partial
 from typing import Optional, Protocol
+from unittest import mock
 
 import grain.python as grain
 import jax
@@ -24,6 +25,7 @@ from axlearn.common.input_grain import (
     Input,
     RaggedTensor,
     maybe_to_iter_dataset,
+    mixture_train_input_source,
     pad_for_evaluation,
     per_feed_batch,
     prefetch_dataset,
@@ -429,6 +431,55 @@ class UtilsTest(TestCase):
         x = cfg.set(name="test").instantiate(parent=None)
         # Should use the per-feed batch size.
         self.assertNestedEqual([np.array([1, 2, 3, 4, 5]), np.array([6, 7, 8, 9, 10])], list(x))
+
+    def test_mixture_train_input_source_batch_size(self):
+        # Create a dummy source.
+        source = range_dataset(start=0, stop=100)
+
+        # Create the mixture source.
+        # We mock config_for_function to just return the function for simplicity if needed,
+        # but here we can just call mixture_train_input_source directly.
+        # However, mixture_train_input_source expects 'sources' to be a list of dicts with 'fn'.
+
+        # Let's mock the source config.
+        def source_fn():
+            return source
+
+        source_cfg = config_for_function(source_fn)
+
+        # Use SimpleNamespace for data_mixture_components.
+        import types
+
+        def preprocessor_fn(ds):
+            return ds
+
+        build_ds_fn = mixture_train_input_source(
+            is_training=True,
+            data_mixture_components=[
+                types.SimpleNamespace(name="test", weight=1.0, source=source_cfg)
+            ],
+            vocab_cfg=None,
+            preprocessor=preprocessor_fn,
+            max_sequence_length=10,
+            fake_input_source_cfg=source_cfg,
+        )
+
+        # Test with explicit batch_size.
+        dispatch_config = DispatchConfig(shard_index=[0], num_shards=[1], batch_size=5)
+        ds = build_ds_fn(dispatch_config)
+        batch = next(iter(ds))
+
+        # If preprocessor is None, it just uses the source.
+        # The source here produces scalars.
+        # batch(5) should produce shape (5,).
+        self.assertEqual(batch.shape, (5,))
+
+        # Test fallback to jax.devices().
+        with mock.patch("jax.devices", return_value=[0] * 8):
+            dispatch_config = DispatchConfig(shard_index=[0], num_shards=[1], batch_size=None)
+            ds = build_ds_fn(dispatch_config)
+            batch = next(iter(ds))
+            self.assertEqual(batch.shape, (8,))
 
 
 class _PerProcessFn(Protocol):

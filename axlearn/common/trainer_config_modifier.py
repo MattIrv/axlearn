@@ -452,6 +452,4 @@ class GrainConfigModifier(ConfigModifier):
         # Convert training input if requested
         if self._convert_training_input and hasattr(cfg, "input"):
             cfg.input = self._convert_input_to_grain(cfg.input)
-        logging.info("GrainConfigModifier call")
-        logging.info(cfg)
         return cfg
