@@ -63,6 +63,7 @@ class SleepTrainer(SpmdTrainer):
         if cfg.sleep_seconds > 0:
             logging.info("Sleeping for %s seconds...", cfg.sleep_seconds)
             time.sleep(cfg.sleep_seconds)
+        jax.experimental.multihost_utils.sync_global_devices("Barrier after step")
 
         # 4. Standard logging and checkpointing (simplified from SpmdTrainer).
         n = self._config.log_every_n_steps or 100
