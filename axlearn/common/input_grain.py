@@ -41,7 +41,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from absl import logging
-from array_record.python.array_record_data_source import PathLikeOrFileInstruction
+from array_record.python.array_record_data_source import PathLikeOrFileInstruction, FileInstruction
 from grain._src.python.data_loader import _determine_worker_count
 from grain._src.python.dataset import dataset as dataset_base
 from jax.experimental import multihost_utils
@@ -157,6 +157,14 @@ def _ragged_batch_size(tensor: Union[Tensor, RaggedTensor]) -> int:  # type: ign
         raise NotImplementedError(type(tensor))
 
 
+class FileInstruction:
+    def __init__(self, filename: str, skip: int, take: int, examples_in_shard: int):
+        self.filename = filename
+        self.skip = skip
+        self.take = take
+        self.examples_in_shard = examples_in_shard
+
+
 def array_record_dataset(
     paths: Union[PathLikeOrFileInstruction, Sequence[PathLikeOrFileInstruction]],
     *,
@@ -178,7 +186,24 @@ def array_record_dataset(
     Returns:
         An ArrayRecord dataset.
     """
-    source = data_source_cls(paths)
+    if not isinstance(paths, Sequence):
+        paths = [paths]
+    file_instructions_broadcast = jax.numpy.zeros([len(paths), 4], dtype=jax.numpy.int32)
+    logging.info(f"On rank {jax.process_index()}, len(paths) is {len(paths)} and paths[0] is {paths[0]}")
+    if jax.process_index() == 0:
+        index_map = {os.fspath(paths[i]): i for i in range(len(paths))}
+        source = data_source_cls(paths)
+        read_instructions = source._read_instructions
+        file_instructions = [[index_map[inst.filename], inst.start, inst.end - inst.start, inst.num_records] for inst in read_instructions]
+        file_instructions_broadcast = jax.numpy.array(file_instructions)
+        logging.info(f"On rank 0, len(file_instructions) is {len(file_instructions)}")
+    file_instructions_broadcast = jax.experimental.multihost_utils.broadcast_one_to_all(file_instructions_broadcast)
+
+    file_instructions = [FileInstruction(filename=paths[item[0].item()], skip=item[1].item(), take=item[2].item(), examples_in_shard=item[3].item()) for item in file_instructions_broadcast]
+    for fi in file_instructions:
+        logging.info(f"On rank {jax.process_index()}, got file instruction filename:{fi.filename}, skip:{fi.skip}, take:{fi.take}, examples_in_shard:{fi.examples_in_shard}")
+    source = data_source_cls(file_instructions)
+    # source = data_source_cls(paths)
     ds = grain.MapDataset.source(source)
     if seed is not None:
         ds = ds.seed(seed)
@@ -406,7 +431,7 @@ def rekey(
 def maybe_to_iter_dataset(
     ds: Dataset,
     *,
-    read_options: ConfigOr[grain.ReadOptions] = config_for_class(grain.ReadOptions),
+    read_options: ConfigOr[grain.ReadOptions] = grain.ReadOptions(prefetch_buffer_size=0),
 ) -> grain.IterDataset:
     """Converts `grain.MapDataset` to `grain.IterDataset`.
 

@@ -393,7 +393,7 @@ class GrainConfigModifier(ConfigModifier):
             max_len=max_sequence_length,
             max_padding_fraction=tf_data_config.preprocessor.max_padding_fraction,
             window_size=tf_data_config.preprocessor.window_size,
-            read_options=grain.ReadOptions(num_threads=2, prefetch_buffer_size=16),
+            read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=1),
         )
         max_sequence_length = tf_data_config.max_sequence_length
         replace_newlines_with = tf_data_config.replace_newlines_with
