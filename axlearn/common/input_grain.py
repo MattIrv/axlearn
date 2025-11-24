@@ -33,6 +33,7 @@ On `repeat` and `shuffle`:
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Protocol, Sequence, TypeVar, Union, runtime_checkable
 
@@ -189,7 +190,6 @@ def array_record_dataset(
     if not isinstance(paths, Sequence):
         paths = [paths]
     file_instructions_broadcast = jax.numpy.zeros([len(paths), 4], dtype=jax.numpy.int32)
-    logging.info(f"On rank {jax.process_index()}, len(paths) is {len(paths)} and paths[0] is {paths[0]}")
     if jax.process_index() == 0:
         index_map = {os.fspath(paths[i]): i for i in range(len(paths))}
         source = data_source_cls(paths)
@@ -200,8 +200,6 @@ def array_record_dataset(
     file_instructions_broadcast = jax.experimental.multihost_utils.broadcast_one_to_all(file_instructions_broadcast)
 
     file_instructions = [FileInstruction(filename=paths[item[0].item()], skip=item[1].item(), take=item[2].item(), examples_in_shard=item[3].item()) for item in file_instructions_broadcast]
-    for fi in file_instructions:
-        logging.info(f"On rank {jax.process_index()}, got file instruction filename:{fi.filename}, skip:{fi.skip}, take:{fi.take}, examples_in_shard:{fi.examples_in_shard}")
     source = data_source_cls(file_instructions)
     # source = data_source_cls(paths)
     ds = grain.MapDataset.source(source)
@@ -431,6 +429,9 @@ def rekey(
 def maybe_to_iter_dataset(
     ds: Dataset,
     *,
+    # read_options: ConfigOr[grain.ReadOptions] = config_for_class(grain.ReadOptions),
+    # The below increases boot qps by 400 on a 128 node test with 100 datasets vs. the original above.
+    # Likely because spinning up workers here slows down the initial boot a bit so QPS is distributed over more time.
     read_options: ConfigOr[grain.ReadOptions] = grain.ReadOptions(prefetch_buffer_size=0),
 ) -> grain.IterDataset:
     """Converts `grain.MapDataset` to `grain.IterDataset`.
