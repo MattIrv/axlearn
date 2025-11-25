@@ -171,6 +171,7 @@ def array_record_dataset(
     *,
     data_source_cls: type[grain.ArrayRecordDataSource] = grain.ArrayRecordDataSource,
     seed: Optional[int],
+    enable_broadcast_instructions: bool = True,
 ) -> Dataset:
     """Builds an ArrayRecord dataset.
 
@@ -189,19 +190,34 @@ def array_record_dataset(
     """
     if not isinstance(paths, Sequence):
         paths = [paths]
-    file_instructions_broadcast = jax.numpy.zeros([len(paths), 4], dtype=jax.numpy.int32)
-    if jax.process_index() == 0:
-        index_map = {os.fspath(paths[i]): i for i in range(len(paths))}
-        source = data_source_cls(paths)
-        read_instructions = source._read_instructions
-        file_instructions = [[index_map[inst.filename], inst.start, inst.end - inst.start, inst.num_records] for inst in read_instructions]
-        file_instructions_broadcast = jax.numpy.array(file_instructions)
-        logging.info(f"On rank 0, len(file_instructions) is {len(file_instructions)}")
-    file_instructions_broadcast = jax.experimental.multihost_utils.broadcast_one_to_all(file_instructions_broadcast)
+    if enable_broadcast_instructions:
+        file_instructions_broadcast = jax.numpy.zeros([len(paths), 4], dtype=jax.numpy.int32)
+        if jax.process_index() == 0:
+            index_map = {os.fspath(paths[i]): i for i in range(len(paths))}
+            source = data_source_cls(paths)
+            read_instructions = source._read_instructions
+            file_instructions = [
+                [index_map[inst.filename], inst.start, inst.end - inst.start, inst.num_records]
+                for inst in read_instructions
+            ]
+            file_instructions_broadcast = jax.numpy.array(file_instructions)
+            logging.info(f"On rank 0, len(file_instructions) is {len(file_instructions)}")
+        file_instructions_broadcast = jax.experimental.multihost_utils.broadcast_one_to_all(
+            file_instructions_broadcast
+        )
 
-    file_instructions = [FileInstruction(filename=paths[item[0].item()], skip=item[1].item(), take=item[2].item(), examples_in_shard=item[3].item()) for item in file_instructions_broadcast]
-    source = data_source_cls(file_instructions)
-    # source = data_source_cls(paths)
+        file_instructions = [
+            FileInstruction(
+                filename=paths[item[0].item()],
+                skip=item[1].item(),
+                take=item[2].item(),
+                examples_in_shard=item[3].item(),
+            )
+            for item in file_instructions_broadcast
+        ]
+        source = data_source_cls(file_instructions)
+    else:
+        source = data_source_cls(paths)
     ds = grain.MapDataset.source(source)
     if seed is not None:
         ds = ds.seed(seed)
@@ -805,6 +821,7 @@ def mixture_train_input_source(
     replace_newlines_with: str = "<n>",
     fake_input_source_cfg: Optional[ConfigOr] = None,
     seed: Optional[int] = 42,
+    enable_broadcast_instructions: bool = True,
 ) -> BuildDatasetFn:
     """Build mixture training input source for decoder-only LM model using grain.
     Mixture sampling happens after input processing but before batching, meaning that each batch
@@ -857,7 +874,13 @@ def mixture_train_input_source(
 
                 # Create ArrayRecord dataset
                 source_ds = (
-                    array_record_dataset(paths=arrayrecord_files, seed=seed).shuffle().repeat()
+                    array_record_dataset(
+                        paths=arrayrecord_files,
+                        seed=seed,
+                        enable_broadcast_instructions=enable_broadcast_instructions,
+                    )
+                    .shuffle()
+                    .repeat()
                 )
                 source_ds = shard_dataset(source_ds, dispatch_config)
                 #

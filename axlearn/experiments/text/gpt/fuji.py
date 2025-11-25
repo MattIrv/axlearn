@@ -984,8 +984,11 @@ def model_config(
 
 
 def trainer_configs(
-    train_input_source: SourceBuilder, eval_input_sources: SourceBuilder
+    train_input_source: SourceBuilder,
+    eval_input_sources: SourceBuilder,
+    enable_broadcast_instructions: bool = True,
 ) -> dict[str, TrainerConfigFn]:
+    default_enable_broadcast_instructions = enable_broadcast_instructions
     """Returns a mapping from config_name to TrainerConfigFn's.
 
     Args:
@@ -1160,15 +1163,25 @@ def trainer_configs(
     grain_config_map = {}
     for config_name in config_map:
 
-        def make_grain_config(base_config_name: str) -> SpmdTrainer.Config:
+        def make_grain_config(
+            base_config_name: str,
+            enable_broadcast_instructions: Optional[bool] = None,
+            **kwargs,
+        ) -> SpmdTrainer.Config:
             """Make a grain input processor variant of the base config.
             This configuration uses the grain input processing framework for
             improved data loading and preprocessing performance.
             Args:
                 base_config_name: The base config name.
+                enable_broadcast_instructions: Whether to enable broadcast instructions.
+                    If None, uses the value from the outer scope.
+                **kwargs: Additional arguments to pass to the config function.
             Returns:
                 A trainer config that uses grain input processing.
             """
+            if enable_broadcast_instructions is None:
+                # pylint: disable-next=cell-var-from-loop
+                enable_broadcast_instructions = default_enable_broadcast_instructions
 
             # pytype: disable=annotation-type-mismatch
             cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
@@ -1177,6 +1190,7 @@ def trainer_configs(
             # Apply grain config modifier to convert tf.data to Grain
             grain_modifier = GrainConfigModifier.default_config().set(
                 convert_training_input=True,
+                enable_broadcast_instructions=enable_broadcast_instructions,
             )
             cfg = grain_modifier.instantiate()(cfg)
             return cfg

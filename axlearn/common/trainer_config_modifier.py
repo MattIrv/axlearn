@@ -341,12 +341,14 @@ class GrainConfigModifier(ConfigModifier):
 
         convert_training_input: bool = True
         grain_source_builder: Optional[ConfigOr[Configurable]] = None
+        enable_broadcast_instructions: bool = True
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
         cfg = self.config
         self._convert_training_input = cfg.convert_training_input
         self._grain_source_builder = cfg.grain_source_builder
+        self._enable_broadcast_instructions = cfg.enable_broadcast_instructions
 
     def _convert_tf_data_to_grain_source(
         self, tf_data_config: ConfigOr[Configurable]
@@ -409,6 +411,7 @@ class GrainConfigModifier(ConfigModifier):
             max_sequence_length=max_sequence_length,
             replace_newlines_with=replace_newlines_with,
             seed=42,
+            enable_broadcast_instructions=self._enable_broadcast_instructions,
         )
 
     def _convert_input_to_grain(self, input_config: Configurable.Config) -> Configurable.Config:
