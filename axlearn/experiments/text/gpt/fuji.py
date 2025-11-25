@@ -32,6 +32,8 @@ from axlearn.common.attention import (
     StackedTransformerLayer,
 )
 from axlearn.common.base_layer import RematSpec
+from absl import logging
+from axlearn.common import config, input_grain
 from axlearn.common.config import TrainerConfigFn, config_for_function
 from axlearn.common.decoder import LmHead
 from axlearn.common.embedding import TransformerTextEmbeddings
@@ -1166,6 +1168,7 @@ def trainer_configs(
         def make_grain_config(
             base_config_name: str,
             enable_broadcast_instructions: Optional[bool] = None,
+            dataset_repeats: int = 1,
             **kwargs,
         ) -> SpmdTrainer.Config:
             """Make a grain input processor variant of the base config.
@@ -1175,6 +1178,7 @@ def trainer_configs(
                 base_config_name: The base config name.
                 enable_broadcast_instructions: Whether to enable broadcast instructions.
                     If None, uses the value from the outer scope.
+                dataset_repeats: The number of times to repeat the dataset.
                 **kwargs: Additional arguments to pass to the config function.
             Returns:
                 A trainer config that uses grain input processing.
@@ -1193,6 +1197,15 @@ def trainer_configs(
                 enable_broadcast_instructions=enable_broadcast_instructions,
             )
             cfg = grain_modifier.instantiate()(cfg)
+
+            if dataset_repeats > 1:
+                if hasattr(cfg.input.source, "data_mixture_components"):
+                    cfg.input.source.data_mixture_components *= dataset_repeats
+                else:
+                    logging.warning(
+                        "dataset_repeats > 1 but cfg.input.source.data_mixture_components not found."
+                    )
+
             return cfg
 
         # Make grain config
