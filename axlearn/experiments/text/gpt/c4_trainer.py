@@ -77,7 +77,7 @@ _train_data_mixture_components = [
         shuffle_buffer_size=8192,
         weight=1.0,
     ),
-] * 100
+] * 1
 # ] * 100
 
 

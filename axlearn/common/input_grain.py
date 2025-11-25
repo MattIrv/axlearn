@@ -429,10 +429,10 @@ def rekey(
 def maybe_to_iter_dataset(
     ds: Dataset,
     *,
-    # read_options: ConfigOr[grain.ReadOptions] = config_for_class(grain.ReadOptions),
-    # The below increases boot qps by 400 on a 128 node test with 100 datasets vs. the original above.
-    # Likely because spinning up workers here slows down the initial boot a bit so QPS is distributed over more time.
-    read_options: ConfigOr[grain.ReadOptions] = grain.ReadOptions(prefetch_buffer_size=0),
+    read_options: ConfigOr[grain.ReadOptions] = config_for_class(grain.ReadOptions),
+    # We find that the below has no effect. Adding a print to the if statement shows this code is never called
+    # or at least never takes the isinstance(mapdataset) branch when running our fuji experiment.
+    # read_options: ConfigOr[grain.ReadOptions] = grain.ReadOptions(num_threads=16, prefetch_buffer_size=500),
 ) -> grain.IterDataset:
     """Converts `grain.MapDataset` to `grain.IterDataset`.
 
