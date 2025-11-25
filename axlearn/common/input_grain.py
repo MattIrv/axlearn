@@ -858,19 +858,17 @@ def mixture_train_input_source(
                 dataset_name = component.name.replace(":", "/")
 
                 # Construct ArrayRecord paths
-                arrayrecord_dataset_dir = os.path.join(
-                    "/tmp/tensorflow_datasets/array_record", dataset_name
-                )
-
-                # Use fs.listdir to list all files in the directory
-                all_files = fs.listdir(arrayrecord_dataset_dir)
-
-                # Filter for arrayrecord files
-                arrayrecord_files = [
-                    os.path.join(arrayrecord_dataset_dir, f)
-                    for f in all_files
-                    if "array_record" in f
-                ]
+                data_dir = utils.get_data_dir()
+                if data_dir == "FAKE":
+                    raise ValueError(
+                        "FAKE data_dir should be handled by fake_input_source_cfg. "
+                        "Please provide a fake_input_source_cfg instead."
+                    )
+                glob_pattern = os.path.join(data_dir, dataset_name, "*array_record*")
+                arrayrecord_files = fs.glob(glob_pattern)
+                if not arrayrecord_files:
+                    raise ValueError(f"No files found for pattern {glob_pattern}")
+                arrayrecord_dataset_dir = os.path.dirname(arrayrecord_files[0])
 
                 # Create ArrayRecord dataset
                 source_ds = (

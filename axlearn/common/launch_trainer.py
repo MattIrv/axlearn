@@ -88,6 +88,7 @@ flags.DEFINE_multi_string(
     "Each argument should be in the format key=value. "
     "Values are parsed as JSON if possible, otherwise as strings.",
 )
+flags.DEFINE_integer("max_step", None, "If set, overrides the max_step in the trainer config.")
 
 FLAGS = flags.FLAGS
 
@@ -132,6 +133,8 @@ def get_trainer_config(
         config_kwargs[k] = v
 
     trainer_config: SpmdTrainer.Config = trainer_config_fn(**config_kwargs)
+    if flag_values.max_step is not None:
+        trainer_config.max_step = flag_values.max_step
     trainer_config.dir = trainer_config.dir or flag_values.trainer_dir
     if flag_values.mesh_selector is not None:
         select_mesh_config(trainer_config, mesh_selector=flag_values.mesh_selector)
