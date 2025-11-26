@@ -342,6 +342,8 @@ class GrainConfigModifier(ConfigModifier):
         convert_training_input: bool = True
         grain_source_builder: Optional[ConfigOr[Configurable]] = None
         enable_broadcast_instructions: bool = True
+        num_threads: int = 2
+        prefetch_buffer_size: int = 0
 
     def __init__(self, cfg: Config):
         super().__init__(cfg)
@@ -349,6 +351,8 @@ class GrainConfigModifier(ConfigModifier):
         self._convert_training_input = cfg.convert_training_input
         self._grain_source_builder = cfg.grain_source_builder
         self._enable_broadcast_instructions = cfg.enable_broadcast_instructions
+        self._num_threads = cfg.num_threads
+        self._prefetch_buffer_size = cfg.prefetch_buffer_size
 
     def _convert_tf_data_to_grain_source(
         self, tf_data_config: ConfigOr[Configurable]
@@ -395,8 +399,9 @@ class GrainConfigModifier(ConfigModifier):
             max_len=max_sequence_length,
             max_padding_fraction=tf_data_config.preprocessor.max_padding_fraction,
             window_size=tf_data_config.preprocessor.window_size,
-            read_options=grain.ReadOptions(num_threads=2, prefetch_buffer_size=0),
-            # read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=1),
+            read_options=grain.ReadOptions(
+                num_threads=self._num_threads, prefetch_buffer_size=self._prefetch_buffer_size
+            ),
         )
         max_sequence_length = tf_data_config.max_sequence_length
         replace_newlines_with = tf_data_config.replace_newlines_with

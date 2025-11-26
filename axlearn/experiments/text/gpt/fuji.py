@@ -1169,6 +1169,8 @@ def trainer_configs(
             base_config_name: str,
             enable_broadcast_instructions: Optional[bool] = None,
             dataset_repeats: int = 1,
+            num_threads: int = 2,
+            prefetch_buffer_size: int = 0,
             **kwargs,
         ) -> SpmdTrainer.Config:
             """Make a grain input processor variant of the base config.
@@ -1179,6 +1181,8 @@ def trainer_configs(
                 enable_broadcast_instructions: Whether to enable broadcast instructions.
                     If None, uses the value from the outer scope.
                 dataset_repeats: The number of times to repeat the dataset.
+                num_threads: The number of threads to use for reading data.
+                prefetch_buffer_size: The size of the prefetch buffer.
                 **kwargs: Additional arguments to pass to the config function.
             Returns:
                 A trainer config that uses grain input processing.
@@ -1195,6 +1199,8 @@ def trainer_configs(
             grain_modifier = GrainConfigModifier.default_config().set(
                 convert_training_input=True,
                 enable_broadcast_instructions=enable_broadcast_instructions,
+                num_threads=num_threads,
+                prefetch_buffer_size=prefetch_buffer_size,
             )
             cfg = grain_modifier.instantiate()(cfg)
 
