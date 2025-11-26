@@ -7,7 +7,7 @@ name = "axlearn"
 version = "0.1.9"
 description = "AXLearn"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 
 # Production dependencies.
 # Minimal requirments for axlearn/common/config.py.
@@ -48,6 +48,7 @@ core = [
     "flax==0.10.2", # for AQT, param converter and adapter.
     "prefixed==0.9.0", # For formatting file sizes, param counts, etc.
     "grain==0.2.11", # Grain input processing. 0.2.6 onwards supports macos.
+    "array-record==0.8.3" # Needed to support gcs-direct
 ]
 # Apple Silicon dependencies.
 # Need to run `conda install -c apple tensorflow-deps` separately.
