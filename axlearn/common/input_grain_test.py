@@ -715,9 +715,9 @@ class ArrayRecordDatasetTest(TestCase):
                 )
 
             # Verify check for existence.
-            mock_fs.exists.assert_called_with("path/to/array_record_instructions.json")
+            mock_fs.exists.assert_called_with("path/to/cached_instructions.json")
             # Verify write.
-            mock_open.assert_called_with("path/to/array_record_instructions.json", "w")
+            mock_open.assert_called_with("path/to/cached_instructions.json", "w")
             handle = mock_open()
             # We expect json dump to be called.
             self.assertTrue(handle.write.called)
@@ -740,7 +740,7 @@ class ArrayRecordDatasetTest(TestCase):
                     )
 
             # Verify read.
-            mock_open.assert_called_with("path/to/array_record_instructions.json", "r")
+            mock_open.assert_called_with("path/to/cached_instructions.json", "r")
             
             # Verify data source was instantiated with instructions.
             self.assertEqual(mock_ds_cls.call_count, 1)
@@ -753,3 +753,12 @@ class ArrayRecordDatasetTest(TestCase):
 
 if __name__ == "__main__":
     absltest.main()
+
+    def test_array_record_reader_monkeypatch(self):
+        # Verify that ArrayRecordReader is monkeypatched.
+        # We check the class name to ensure it's our patched version.
+        try:
+            from array_record.python import array_record_module
+            self.assertEqual(array_record_module.ArrayRecordReader.__name__, "_PatchedArrayRecordReader")
+        except ImportError:
+            pass

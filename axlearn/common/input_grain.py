@@ -47,6 +47,7 @@ from grain._src.python.data_loader import _determine_worker_count
 from grain._src.python.dataset import dataset as dataset_base
 from jax.experimental import multihost_utils
 
+
 from axlearn.common import file_system as fs
 from axlearn.common import input_base, utils
 from axlearn.common.config import (
@@ -58,6 +59,33 @@ from axlearn.common.config import (
     maybe_instantiate,
 )
 from axlearn.common.module import Module
+
+try:
+    from array_record.python import array_record_module
+
+    # Monkeypatch ArrayRecordReader to improve performance on GCS.
+    # The default buffer size (often 32KB or 1MB) is too small for GCS latency.
+    # We also disable readahead by default for GCS to speed up initialization (footer reads).
+    _OriginalArrayRecordReader = array_record_module.ArrayRecordReader
+
+    class _PatchedArrayRecordReader(_OriginalArrayRecordReader):
+        def __init__(self, path, options="", **kwargs):
+            if path.startswith("gs://"):
+                # Increase buffer size to 16MB for GCS.
+                if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 4 * 1024 * 1024:
+                    kwargs["file_reader_buffer_size"] = 16 * 1024 * 1024
+                
+                # Disable readahead if not specified (optimizes random access/initialization).
+                if "readahead_buffer_size" not in options:
+                    if options:
+                        options += ",readahead_buffer_size:0"
+                    else:
+                        options = "readahead_buffer_size:0"
+            super().__init__(path, options=options, **kwargs)
+
+    array_record_module.ArrayRecordReader = _PatchedArrayRecordReader
+except ImportError:
+    pass
 
 Dataset = Union[grain.MapDataset, grain.IterDataset]
 _T = TypeVar("_T")
@@ -172,7 +200,7 @@ def array_record_dataset(
     data_source_cls: type[grain.ArrayRecordDataSource] = grain.ArrayRecordDataSource,
     seed: Optional[int],
     enable_broadcast_instructions: bool = True,
-    cache_broadcast_instructions_file: bool = True,
+    cache_broadcast_instructions_file: bool = False,
 ) -> Dataset:
     """Builds an ArrayRecord dataset.
 
