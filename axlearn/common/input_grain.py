@@ -865,7 +865,11 @@ def mixture_train_input_source(
                         "Please provide a fake_input_source_cfg instead."
                     )
                 glob_pattern = os.path.join(data_dir, dataset_name, "*array_record*")
+                start_time = time.time()
                 arrayrecord_files = fs.glob(glob_pattern)
+                logging.info(
+                    "Glob %s took %.2f seconds.", glob_pattern, time.time() - start_time
+                )
                 if not arrayrecord_files:
                     raise ValueError(f"No files found for pattern {glob_pattern}")
                 arrayrecord_dataset_dir = os.path.dirname(arrayrecord_files[0])
