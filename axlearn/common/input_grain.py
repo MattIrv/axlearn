@@ -172,6 +172,7 @@ def array_record_dataset(
     data_source_cls: type[grain.ArrayRecordDataSource] = grain.ArrayRecordDataSource,
     seed: Optional[int],
     enable_broadcast_instructions: bool = True,
+    cache_broadcast_instructions_file: bool = True,
 ) -> Dataset:
     """Builds an ArrayRecord dataset.
 
@@ -184,22 +185,63 @@ def array_record_dataset(
             pass `FileInstruction`s.
         data_source_cls: A class reference to a subclass of ArrayRecordDataSource.
         seed: Seed for any downstream transformations (e.g. `shuffle` or `random_map`).
+        enable_broadcast_instructions: Whether to broadcast file instructions from rank 0 to all
+            other ranks. This is useful when the number of files is large and reading them on all
+            ranks is slow.
+        cache_broadcast_instructions_file: Whether to cache the broadcast instructions to a file.
+            If True, rank 0 will attempt to read the instructions from a file in the same directory
+            as the first path. If the file does not exist, it will be created. This is useful to
+            save time on subsequent runs.
 
     Returns:
         An ArrayRecord dataset.
     """
     if not isinstance(paths, Sequence):
         paths = [paths]
+    paths = sorted(paths)
     if enable_broadcast_instructions:
         file_instructions_broadcast = jax.numpy.zeros([len(paths), 4], dtype=jax.numpy.int32)
         if jax.process_index() == 0:
-            index_map = {os.fspath(paths[i]): i for i in range(len(paths))}
-            source = data_source_cls(paths)
-            read_instructions = source._read_instructions
-            file_instructions = [
-                [index_map[inst.filename], inst.start, inst.end - inst.start, inst.num_records]
-                for inst in read_instructions
-            ]
+            # Try to read from cache if enabled.
+            cache_path = None
+            if cache_broadcast_instructions_file and len(paths) > 0:
+                first_path = os.fspath(paths[0])
+                if isinstance(paths[0], FileInstruction):
+                    first_path = paths[0].filename
+                cache_path = os.path.join(
+                    os.path.dirname(first_path), "cached_instructions.json"
+                )
+
+            file_instructions = None
+            if cache_path and fs.exists(cache_path):
+                try:
+                    logging.info("Reading cached file instructions from %s", cache_path)
+                    with fs.open(cache_path, "r") as f:
+                        file_instructions = json.load(f)
+                except Exception as e:  # pylint: disable=broad-except
+                    logging.warning("Failed to read cached file instructions: %s", e)
+
+            if file_instructions is None:
+                index_map = {os.fspath(paths[i]): i for i in range(len(paths))}
+                source = data_source_cls(paths)
+                read_instructions = source._read_instructions
+                file_instructions = [
+                    [
+                        index_map[inst.filename],
+                        inst.start,
+                        inst.end - inst.start,
+                        inst.num_records,
+                    ]
+                    for inst in read_instructions
+                ]
+                if cache_path:
+                    try:
+                        logging.info("Writing file instructions to cache %s", cache_path)
+                        with fs.open(cache_path, "w") as f:
+                            json.dump(file_instructions, f)
+                    except Exception as e:  # pylint: disable=broad-except
+                        logging.warning("Failed to write cached file instructions: %s", e)
+
             file_instructions_broadcast = jax.numpy.array(file_instructions)
             logging.info(f"On rank 0, len(file_instructions) is {len(file_instructions)}")
         file_instructions_broadcast = jax.experimental.multihost_utils.broadcast_one_to_all(
