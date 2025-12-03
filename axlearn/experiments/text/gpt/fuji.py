@@ -1016,7 +1016,7 @@ def trainer_configs(
         )
         max_sequence_length = kwargs.pop("max_sequence_length")
         # pylint: disable-next=unexpected-keyword-arg,missing-kwoa
-        config_map[config_name] = get_trainer_config_fn(
+        config_fn = get_trainer_config_fn(
             train_input_source=train_input_source(
                 vocab_size=vocab_size,
                 max_sequence_length=max_sequence_length,
@@ -1026,6 +1026,20 @@ def trainer_configs(
             ),
             **kwargs,
         )
+        if model_size == "test":
+
+            def wrapper(config_fn=config_fn, **kwargs):
+                trainer_cfg = config_fn()
+                if "test_batch_size" in kwargs:
+                    test_batch_size = int(kwargs["test_batch_size"])
+                    trainer_cfg.input.input_dispatcher.global_logical_batch_size = test_batch_size
+                    for evaler in trainer_cfg.evalers.values():
+                        evaler.input.input_dispatcher.global_logical_batch_size = test_batch_size
+                return trainer_cfg
+
+            config_map[config_name] = wrapper
+        else:
+            config_map[config_name] = config_fn
 
         def make_fp8_config(base_config_name: str) -> SpmdTrainer.Config:
             """Make a FP8 variant of the base config.
@@ -1152,12 +1166,16 @@ def trainer_configs(
         )
 
         def set_sleep_seconds(
-            sleep_seconds: float = 1.0,
+            sleep_seconds: float = 0.3,
             *,
             base_cfg_fn: TrainerConfigFn = base_sleep_config_fn,
+            model_size=model_size,
+            **kwargs,
         ) -> SleepTrainer.Config:
             cfg: SleepTrainer.Config = base_cfg_fn()
             cfg.sleep_seconds = sleep_seconds
+            if model_size == "test" and "test_batch_size" in kwargs:
+                cfg.input.input_dispatcher.global_logical_batch_size = int(kwargs["test_batch_size"])
             return cfg
 
         config_map[sleep_config_name] = set_sleep_seconds
@@ -1170,7 +1188,7 @@ def trainer_configs(
             enable_broadcast_instructions: Optional[bool] = None,
             dataset_repeats: int = 1,
             num_threads: int = 2,
-            prefetch_buffer_size: int = 0,
+            prefetch_buffer_size: int = 4,
             **kwargs,
         ) -> SpmdTrainer.Config:
             """Make a grain input processor variant of the base config.
@@ -1192,7 +1210,10 @@ def trainer_configs(
                 enable_broadcast_instructions = default_enable_broadcast_instructions
 
             # pytype: disable=annotation-type-mismatch
-            cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
+            try:
+                cfg: SpmdTrainer.Config = config_map[base_config_name](**kwargs).clone()
+            except TypeError:
+                cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
             # pytype: enable=annotation-type-mismatch
 
             # Apply grain config modifier to convert tf.data to Grain

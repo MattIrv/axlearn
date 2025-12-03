@@ -534,6 +534,7 @@ def maybe_to_iter_dataset(
     """
     read_options = maybe_instantiate(read_options)
     if isinstance(ds, grain.MapDataset):
+        logging.info(f"Converting dataset with read options: num_threads:{read_options.num_threads}, prefetch_buffer_size:{read_options.prefetch_buffer_size}")
         ds = ds.to_iter_dataset(read_options)
     return ds
 
