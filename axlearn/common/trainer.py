@@ -12,6 +12,7 @@ import time
 from collections.abc import Sequence
 from typing import Any, Callable, ContextManager, Literal, NamedTuple, Optional, Union
 
+import grain.python as grain
 import jax
 import numpy as np
 from absl import logging
@@ -162,7 +163,7 @@ class SpmdTrainer(Module):
         # The start steps must therefore be at least 3 steps apart from each other.
         start_trace_steps: Sequence[int] = []
         # By default, only trace on host 0.
-        start_trace_process_indices: Union[Literal["all"], Sequence[int]] = [0]
+        start_trace_process_indices: Union[Literal["all"], Sequence[int]] = "all"
 
         # Determines whether to run the XLA Silent-data-corruption Checker (XSC) for a given step.
         # If None, never run the checker.
@@ -310,6 +311,9 @@ class SpmdTrainer(Module):
             )
             # Start from the beginning of the input dataset by default.
             self._input_iter = iter(self.input.dataset())
+            if isinstance(self._input_iter, grain.DatasetIterator):
+                logging.info("Starting prefetching for input iterator.")
+                self._input_iter.start_prefetch()
             cfg.summary_writer.dir = cfg.summary_writer.dir or os.path.join(
                 cfg.dir, "summaries", "train_train"
             )

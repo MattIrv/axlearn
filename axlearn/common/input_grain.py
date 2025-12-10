@@ -74,7 +74,7 @@ try:
                 # Increase buffer size to 16MB for GCS.
                 if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 4 * 1024 * 1024:
                     kwargs["file_reader_buffer_size"] = 16 * 1024 * 1024
-                
+
                 # Disable readahead if not specified (optimizes random access/initialization).
                 if "readahead_buffer_size" not in options:
                     if options:
@@ -200,7 +200,7 @@ def array_record_dataset(
     data_source_cls: type[grain.ArrayRecordDataSource] = grain.ArrayRecordDataSource,
     seed: Optional[int],
     enable_broadcast_instructions: bool = True,
-    cache_broadcast_instructions_file: bool = False,
+    cache_broadcast_instructions_file: bool = True,
 ) -> Dataset:
     """Builds an ArrayRecord dataset.
 
@@ -1004,6 +1004,15 @@ def mixture_train_input_source(
         gbs = dispatch_config.batch_size
         if gbs is None:
             gbs = len(jax.devices())
-        return mixed_ds.batch(gbs)
+        mixed_ds = mixed_ds.batch(gbs)
+        mixed_ds = prefetch_dataset(
+            mixed_ds,
+            multiprocessing_options=grain.MultiprocessingOptions(
+                num_workers=4,
+                per_worker_buffer_size=1,
+                enable_profiling=False,
+            ),
+        )
+        return mixed_ds
 
     return build_dataset_fn

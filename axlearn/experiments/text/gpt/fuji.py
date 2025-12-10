@@ -325,7 +325,7 @@ def get_trainer_kwargs(
             max_sequence_length=64,
             train_batch_size=32,
             eval_batch_size=32,
-            max_step=300,
+            max_step=3000,
             eval_every_n_steps=1500,
             save_every_n_steps=500,
             mesh_shape=mesh_shape_from_axes(data=-1),
@@ -1188,7 +1188,7 @@ def trainer_configs(
             enable_broadcast_instructions: Optional[bool] = None,
             dataset_repeats: int = 1,
             num_threads: int = 2,
-            prefetch_buffer_size: int = 4,
+            prefetch_buffer_size: int = 0,
             **kwargs,
         ) -> SpmdTrainer.Config:
             """Make a grain input processor variant of the base config.
