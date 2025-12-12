@@ -1003,16 +1003,28 @@ def mixture_train_input_source(
         # Shard the mixed dataset
         gbs = dispatch_config.batch_size
         if gbs is None:
+            logging.warning("Batch size is not specified, using %d devices.", len(jax.devices()))
             gbs = len(jax.devices())
-        mixed_ds = mixed_ds.batch(gbs)
+        logging.info("Batch size: %d", gbs)
         mixed_ds = prefetch_dataset(
             mixed_ds,
             multiprocessing_options=grain.MultiprocessingOptions(
-                num_workers=4,
-                per_worker_buffer_size=1,
+                num_workers=16,
+                per_worker_buffer_size=(gbs // 4),
                 enable_profiling=False,
             ),
         )
+        mixed_ds = mixed_ds.batch(gbs)
+        # mixed_ds = prefetch_dataset(
+        #     mixed_ds,
+        #     multiprocessing_options=grain.MultiprocessingOptions(
+        #         num_workers=4,
+        #         per_worker_buffer_size=1,
+        #         enable_profiling=False,
+        #     ),
+        # )
+        # mixed_ds = grain.experimental.ThreadPrefetchDatasetIterator(parent=mixed_ds, prefetch_buffer_size=4)
+        # mixed_ds.start_prefetch()
         return mixed_ds
 
     return build_dataset_fn
