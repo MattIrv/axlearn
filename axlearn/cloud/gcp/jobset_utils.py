@@ -1721,6 +1721,7 @@ class CPUReplicatedJob(SingleReplicatedJob):
             )
 
         resources = {}
+        resources["requests"] = {"memory": "100Gi"}
 
         return dict(
             name=cfg.name,
@@ -1751,7 +1752,7 @@ class CPUReplicatedJob(SingleReplicatedJob):
                     )
                 )
 
-        selector.update({"node.kubernetes.io/instance-type": "n2-standard-64"})
+        selector.update({"node.kubernetes.io/instance-type": "n2-standard-32"})
 
         containers = [self._build_container()]
         init_containers = []

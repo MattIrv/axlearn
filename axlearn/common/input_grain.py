@@ -72,8 +72,8 @@ try:
         def __init__(self, path, options="", **kwargs):
             if path.startswith("gs://"):
                 # Increase buffer size to 16MB for GCS.
-                if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 4 * 1024 * 1024:
-                    kwargs["file_reader_buffer_size"] = 16 * 1024 * 1024
+                if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 1 * 1024 * 1024:
+                    kwargs["file_reader_buffer_size"] = 1 * 1024 * 1024
 
                 # Disable readahead if not specified (optimizes random access/initialization).
                 if "readahead_buffer_size" not in options:
@@ -969,24 +969,24 @@ def mixture_train_input_source(
                     features_dict = tfds.features.FeaturesDict.from_json(json.load(f))
                 source_ds = source_ds.map(features_dict.deserialize_example_np)
 
-            # Apply preprocessing
-            def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
-                return maybe_set_config(
-                    p,
-                    vocab_cfg=vocab_cfg,
-                    max_sequence_length=max_sequence_length,
-                    replace_newlines_with=replace_newlines_with,
-                )
+            # # Apply preprocessing
+            # def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
+            #     return maybe_set_config(
+            #         p,
+            #         vocab_cfg=vocab_cfg,
+            #         max_sequence_length=max_sequence_length,
+            #         replace_newlines_with=replace_newlines_with,
+            #     )
 
-            if isinstance(preprocessor, list):
-                assert len(preprocessor) == len(data_mixture_components)
-                processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
-            else:
-                processor_cfg = _set_config_for_preprocessor(preprocessor)
+            # if isinstance(preprocessor, list):
+            #     assert len(preprocessor) == len(data_mixture_components)
+            #     processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
+            # else:
+            #     processor_cfg = _set_config_for_preprocessor(preprocessor)
 
-            # Apply processor to the source dataset
-            processor_fn = maybe_instantiate(processor_cfg)
-            source_ds = processor_fn(source_ds)
+            # # Apply processor to the source dataset
+            # processor_fn = maybe_instantiate(processor_cfg)
+            # source_ds = processor_fn(source_ds)
 
             # Repeat the dataset for mixing.
             try:
@@ -1000,6 +1000,25 @@ def mixture_train_input_source(
         # Mix the datasets
         mixed_ds = sample_from_datasets(sources=sources, weights=weights)
 
+        # Apply preprocessing
+        def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
+            return maybe_set_config(
+                p,
+                vocab_cfg=vocab_cfg,
+                max_sequence_length=max_sequence_length,
+                replace_newlines_with=replace_newlines_with,
+            )
+
+        if isinstance(preprocessor, list):
+            assert len(preprocessor) == len(data_mixture_components)
+            processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
+        else:
+            processor_cfg = _set_config_for_preprocessor(preprocessor)
+
+        # Apply processor to the source dataset
+        processor_fn = maybe_instantiate(processor_cfg)
+        mixed_ds = processor_fn(mixed_ds)
+
         # Shard the mixed dataset
         gbs = dispatch_config.batch_size
         if gbs is None:
@@ -1009,8 +1028,8 @@ def mixture_train_input_source(
         mixed_ds = prefetch_dataset(
             mixed_ds,
             multiprocessing_options=grain.MultiprocessingOptions(
-                num_workers=16,
-                per_worker_buffer_size=(gbs // 4),
+                num_workers=4,
+                per_worker_buffer_size=(gbs * 2),
                 enable_profiling=False,
             ),
         )
