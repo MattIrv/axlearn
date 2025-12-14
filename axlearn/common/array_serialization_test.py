@@ -38,7 +38,7 @@ from axlearn.common.array_serialization import (
 
 # TODO(wyi): This dictionary is introduced for the temporary peroiod of upgrading JAX from 0.5.3 to
 # 0.6.2. Once the upgrading is complete, we should remove it ASAP.
-_ts_open = {"0.6.2": "ts.open", "0.5.3": "serialization.ts.open"}[jax.__version__]
+_ts_open = {"0.8.1": "ts.open", "0.6.2": "ts.open", "0.5.3": "serialization.ts.open"}[jax.__version__]
 
 
 @contextmanager
@@ -102,6 +102,7 @@ class SerializerTest(parameterized.TestCase):
 
         ts_open_handle: Any = None
         old_open = {
+            "0.8.1": lambda: array_serialization.ts.open,
             "0.6.2": lambda: array_serialization.ts.open,
             "0.5.3": lambda: array_serialization.serialization.ts.open,
         }[jax.__version__]()
