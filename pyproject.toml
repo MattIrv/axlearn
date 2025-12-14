@@ -13,7 +13,7 @@ requires-python = ">=3.12"
 # Minimal requirments for axlearn/common/config.py.
 dependencies = [
     "attrs>=23.1.0", # We use `type` in `attrs.field`
-    "numpy==1.26.4",  # verified with tensorflow 2.14 RaggedTensor
+    "numpy==2.1.3",  # verified with tensorflow 2.14 RaggedTensor
 ]
 
 [project.optional-dependencies]
@@ -23,8 +23,8 @@ core = [
     "absl-py==2.1.0",
     "chex==0.1.88",
     "importlab==0.8.1",  # breaks pytype on 0.8
-    "jax==0.6.2",
-    "jaxlib==0.6.2",
+    "jax==0.8.1",
+    "jaxlib==0.8.1",
     "ml-dtypes==0.5.3",
     "msgpack==1.1.0",  # for checkpointing.
     "nltk==3.7",  # for text preprocessing
@@ -42,7 +42,7 @@ core = [
     "tensorstore>=0.1.63",  # used for supporting GDA checkpoints
     "toml",  # for config management
     "typing-extensions==4.12.2",
-    "scipy==1.12.0",  # to avoid "module 'scipy.linalg' has no attribute 'tril'"
+    "scipy==1.16.3",  # to avoid "module 'scipy.linalg' has no attribute 'tril'"
     "seqio==0.0.20",  # used for inputs
     "aqtp==0.9.0", # Updated from 0.4.0; compatible with Python 3.10
     "flax==0.10.2", # for AQT, param converter and adapter.
@@ -71,7 +71,7 @@ dev = [
     "pytype==2024.10.11",  # type checking
     "scikit-learn==1.5.2",  # test-only
     # Fix AttributeError: module 'scipy.linalg' has no attribute 'tril' and related scipy import errors.
-    "scipy==1.12.0",
+    "scipy==1.16.3",
     "sentencepiece != 0.1.92",
     "tqdm",  # test-only
     "timm==0.6.12",  # DiT Dependency test-only
@@ -108,7 +108,7 @@ gcp = [
 # Note: Specify -f https://storage.googleapis.com/jax-releases/libtpu_releases.html during install.
 tpu = [
     "axlearn[gcp]",
-    "jax[tpu]==0.6.2",  # must be >=0.4.19 for compat with v5p.
+    "jax[tpu]==0.8.1",  # must be >=0.4.19 for compat with v5p.
     "pathwaysutils==0.1.1",  # For JAX+Pathways single-controller accelerator coordinator.
 ]
 # Vertex AI tensorboard. TODO(markblee): Merge with `gcp`.

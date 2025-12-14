@@ -84,6 +84,40 @@ try:
             super().__init__(path, options=options, **kwargs)
 
     array_record_module.ArrayRecordReader = _PatchedArrayRecordReader
+
+    class _EphemeralReaders:
+        def __init__(self, read_instructions, options):
+            self._read_instructions = read_instructions
+            self._options = options
+
+        def __getitem__(self, idx):
+            filename = self._read_instructions[idx].filename
+            return array_record_module.ArrayRecordReader(
+                filename,
+                options=self._options,
+            )
+
+        def __setitem__(self, idx, value):
+            pass
+
+        def __len__(self):
+            return len(self._read_instructions)
+
+    _OriginalArrayRecordDataSource = grain.ArrayRecordDataSource
+
+    class _PatchedArrayRecordDataSource(_OriginalArrayRecordDataSource):
+        def __init__(self, paths):
+            super().__init__(paths)
+            self._readers = _EphemeralReaders(self._read_instructions, self._reader_options_string)
+
+        def _ensure_reader_exists(self, reader_idx: int) -> None:
+            pass
+
+        def __setstate__(self, state):
+            super().__setstate__(state)
+            self._readers = _EphemeralReaders(self._read_instructions, self._reader_options_string)
+
+    grain.ArrayRecordDataSource = _PatchedArrayRecordDataSource
 except ImportError:
     pass
 
@@ -1025,23 +1059,23 @@ def mixture_train_input_source(
             logging.warning("Batch size is not specified, using %d devices.", len(jax.devices()))
             gbs = len(jax.devices())
         logging.info("Batch size: %d", gbs)
-        mixed_ds = prefetch_dataset(
-            mixed_ds,
-            multiprocessing_options=grain.MultiprocessingOptions(
-                num_workers=4,
-                per_worker_buffer_size=(gbs * 2),
-                enable_profiling=False,
-            ),
-        )
-        mixed_ds = mixed_ds.batch(gbs)
         # mixed_ds = prefetch_dataset(
         #     mixed_ds,
         #     multiprocessing_options=grain.MultiprocessingOptions(
-        #         num_workers=4,
-        #         per_worker_buffer_size=1,
+        #         num_workers=32,
+        #         per_worker_buffer_size=(gbs * 2),
         #         enable_profiling=False,
         #     ),
         # )
+        mixed_ds = mixed_ds.batch(gbs)
+        mixed_ds = prefetch_dataset(
+            mixed_ds,
+            multiprocessing_options=grain.MultiprocessingOptions(
+                num_workers=16,
+                per_worker_buffer_size=4,
+                enable_profiling=False,
+            ),
+        )
         # mixed_ds = grain.experimental.ThreadPrefetchDatasetIterator(parent=mixed_ds, prefetch_buffer_size=4)
         # mixed_ds.start_prefetch()
         return mixed_ds
