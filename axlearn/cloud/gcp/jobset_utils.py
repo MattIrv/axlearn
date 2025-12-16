@@ -90,11 +90,11 @@ class GCSFuseMount(VolumeMount):
     gcs_path: str
     name: str = "gcs-fuse-csi-ephemeral"
     mount_path: str = "/output"
-    cpu: str = "250m"
-    memory: str = "256Mi"
+    cpu: str = "25000m"
+    memory: str = "5Gi"
     ephemeral_gb: str = "5Gi"
-    shared_memory: str = "1Gi"
-    http_client_timeout: str = "0s"
+    shared_memory: str = "5Gi"
+    http_client_timeout: str = "500ms"
 
 
 @dataclass(kw_only=True)

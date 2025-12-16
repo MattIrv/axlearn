@@ -322,7 +322,7 @@ def get_trainer_kwargs(
                 flash_attention=flash_attention,
             ),
             learner_kwargs=dict(peak_lr=6e-4, weight_decay=0.01, lr_warmup_steps=0),
-            max_sequence_length=64,
+            max_sequence_length=max_sequence_length,
             # train_batch_size=32,
             train_batch_size=train_batch_size,
             eval_batch_size=32,

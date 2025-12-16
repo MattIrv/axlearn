@@ -36,6 +36,7 @@ import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Protocol, Sequence, TypeVar, Union, runtime_checkable
+import traceback
 
 import grain.python as grain
 import jax
@@ -91,11 +92,16 @@ try:
             self._options = options
 
         def __getitem__(self, idx):
-            filename = self._read_instructions[idx].filename
-            return array_record_module.ArrayRecordReader(
-                filename,
-                options=self._options,
-            )
+            start = time.perf_counter()
+            try:
+                filename = self._read_instructions[idx].filename
+                return array_record_module.ArrayRecordReader(
+                    filename,
+                    options=self._options,
+                )
+            finally:
+                logging.info("ArrayRecordReader %d: %f", idx, time.perf_counter() - start)
+                logging.log_first_n(logging.INFO, f"ArrayRecordReader {idx}:\n{traceback.print_stack()}", 5)
 
         def __setitem__(self, idx, value):
             pass
@@ -108,6 +114,7 @@ try:
     class _PatchedArrayRecordDataSource(_OriginalArrayRecordDataSource):
         def __init__(self, paths):
             super().__init__(paths)
+            self._reader_options_string = "readahead_buffer_size:0,max_parallelism:0"
             self._readers = _EphemeralReaders(self._read_instructions, self._reader_options_string)
 
         def _ensure_reader_exists(self, reader_idx: int) -> None:
@@ -430,7 +437,7 @@ class _UnbatchDatasetIterator(grain.DatasetIterator):
             if batch_size == 0 and self._skip_empty_batch:
                 example = None
             else:
-                assert 0 <= self._index < batch_size, (self._index, batch_size)
+                assert 0 <= self._index < batch_size, (self._index, batch_size, self._current_batch)
                 example = jax.tree.unflatten(structure, (x[self._index] for x in leaves))
             self._index += 1
 
@@ -1025,9 +1032,10 @@ def mixture_train_input_source(
             # Repeat the dataset for mixing.
             try:
                 source_ds = source_ds.repeat()
-            except AttributeError:
+            except (AttributeError, ValueError):
                 pass
 
+            # source_ds = source_ds.to_iter_dataset(read_options=grain.ReadOptions(num_threads=4, prefetch_buffer_size=4))
             sources.append(source_ds)
             weights.append(component.weight)
 
@@ -1062,20 +1070,20 @@ def mixture_train_input_source(
         # mixed_ds = prefetch_dataset(
         #     mixed_ds,
         #     multiprocessing_options=grain.MultiprocessingOptions(
-        #         num_workers=32,
-        #         per_worker_buffer_size=(gbs * 2),
-        #         enable_profiling=False,
+        #         num_workers=16,
+        #         per_worker_buffer_size=(gbs * 4),
+        #         enable_profiling=True,
         #     ),
         # )
         mixed_ds = mixed_ds.batch(gbs)
-        mixed_ds = prefetch_dataset(
-            mixed_ds,
-            multiprocessing_options=grain.MultiprocessingOptions(
-                num_workers=16,
-                per_worker_buffer_size=4,
-                enable_profiling=False,
-            ),
-        )
+        # mixed_ds = prefetch_dataset(
+        #     mixed_ds,
+        #     multiprocessing_options=grain.MultiprocessingOptions(
+        #         num_workers=16,
+        #         per_worker_buffer_size=4,
+        #         enable_profiling=True,
+        #     ),
+        # )
         # mixed_ds = grain.experimental.ThreadPrefetchDatasetIterator(parent=mixed_ds, prefetch_buffer_size=4)
         # mixed_ds.start_prefetch()
         return mixed_ds

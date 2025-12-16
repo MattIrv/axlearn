@@ -331,7 +331,7 @@ def windowed_packing(
         read_options=read_options,
     )
     # After processing, we have non-ragged np.arrays, so we can unbatch.
-    ds = input_grain.unbatch(ds)
+    ds = input_grain.unbatch(ds, skip_empty_batch=True)
     return ds
 
 
@@ -550,5 +550,5 @@ def text_to_lm_eval_input(
     )
     ds = ds.map(_drop_empty_targets)
     ds = input_grain.maybe_to_iter_dataset(ds)
-    ds = input_grain.unbatch(ds)
+    ds = input_grain.unbatch(ds, skip_empty_batch=True)
     return ds
