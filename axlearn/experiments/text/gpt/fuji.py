@@ -326,8 +326,8 @@ def get_trainer_kwargs(
             # train_batch_size=32,
             train_batch_size=train_batch_size,
             eval_batch_size=32,
-            max_step=1000,
-            # max_step=max_step,
+            # max_step=300,
+            max_step=max_step,
             eval_every_n_steps=1500,
             save_every_n_steps=500,
             mesh_shape=mesh_shape_from_axes(data=-1),
@@ -348,7 +348,7 @@ def get_trainer_kwargs(
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
             max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=8),
+            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=16),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",
@@ -1028,20 +1028,29 @@ def trainer_configs(
             ),
             **kwargs,
         )
-        if model_size == "test":
+        def wrapper(config_fn=config_fn, **kwargs):
+            trainer_cfg = config_fn()
+            if "test_batch_size" in kwargs:
+                test_batch_size = int(kwargs["test_batch_size"])
+                trainer_cfg.input.input_dispatcher.global_logical_batch_size = test_batch_size
+                for evaler in trainer_cfg.evalers.values():
+                    evaler.input.input_dispatcher.global_logical_batch_size = test_batch_size
+            return trainer_cfg
+        config_map[config_name] = wrapper
+        # if model_size == "test":
 
-            def wrapper(config_fn=config_fn, **kwargs):
-                trainer_cfg = config_fn()
-                if "test_batch_size" in kwargs:
-                    test_batch_size = int(kwargs["test_batch_size"])
-                    trainer_cfg.input.input_dispatcher.global_logical_batch_size = test_batch_size
-                    for evaler in trainer_cfg.evalers.values():
-                        evaler.input.input_dispatcher.global_logical_batch_size = test_batch_size
-                return trainer_cfg
+        #     def wrapper(config_fn=config_fn, **kwargs):
+        #         trainer_cfg = config_fn()
+        #         if "test_batch_size" in kwargs:
+        #             test_batch_size = int(kwargs["test_batch_size"])
+        #             trainer_cfg.input.input_dispatcher.global_logical_batch_size = test_batch_size
+        #             for evaler in trainer_cfg.evalers.values():
+        #                 evaler.input.input_dispatcher.global_logical_batch_size = test_batch_size
+        #         return trainer_cfg
 
-            config_map[config_name] = wrapper
-        else:
-            config_map[config_name] = config_fn
+        #     config_map[config_name] = wrapper
+        # else:
+        #     config_map[config_name] = config_fn
 
         def make_fp8_config(base_config_name: str) -> SpmdTrainer.Config:
             """Make a FP8 variant of the base config.

@@ -4,6 +4,7 @@
 
 import json
 import os
+import resource
 from typing import Any, Optional
 
 import jax
@@ -172,6 +173,12 @@ def get_trainer_config(
 
 def run_trainer(trainer_config: SpmdTrainer.Config) -> Any:
     measurement.record_event(measurement.Event.START_JOB)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (524288, 524288))
+    logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NOFILE))
+    logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NPROC))
+    logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_STACK))
+    logging.info("Resource usage: %s", resource.getrusage(resource.RUSAGE_CHILDREN))
+
     trainer_config_debug_string = trainer_config.debug_string()
     logging.info("Trainer config:\n%s", trainer_config_debug_string)
     if jax.process_index() == 0:

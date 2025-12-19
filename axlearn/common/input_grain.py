@@ -30,8 +30,10 @@ On `repeat` and `shuffle`:
 * `repeat` with `num_repeat=None` will produce datasets with size `sys.maxsize`.
 """
 
+import collections
 import json
 import os
+import resource
 import sys
 import time
 from dataclasses import dataclass
@@ -71,10 +73,11 @@ try:
 
     class _PatchedArrayRecordReader(_OriginalArrayRecordReader):
         def __init__(self, path, options="", **kwargs):
-            if path.startswith("gs://"):
+            # if path.startswith("gs://"):
+            if True:
                 # Increase buffer size to 16MB for GCS.
-                if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 1 * 1024 * 1024:
-                    kwargs["file_reader_buffer_size"] = 1 * 1024 * 1024
+                # if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 1 * 1024 * 1024:
+                kwargs["file_reader_buffer_size"] = 0
 
                 # Disable readahead if not specified (optimizes random access/initialization).
                 if "readahead_buffer_size" not in options:
@@ -90,18 +93,24 @@ try:
         def __init__(self, read_instructions, options):
             self._read_instructions = read_instructions
             self._options = options
+            self._cache = collections.OrderedDict()
 
         def __getitem__(self, idx):
-            start = time.perf_counter()
-            try:
-                filename = self._read_instructions[idx].filename
-                return array_record_module.ArrayRecordReader(
-                    filename,
-                    options=self._options,
-                )
-            finally:
-                logging.info("ArrayRecordReader %d: %f", idx, time.perf_counter() - start)
-                logging.log_first_n(logging.INFO, f"ArrayRecordReader {idx}:\n{traceback.print_stack()}", 5)
+            if idx in self._cache:
+                # print(f"pid: {os.getpid()}, idx: {idx}, Cache hit")
+                self._cache.move_to_end(idx)
+                return self._cache[idx]
+
+            # print(f"pid: {os.getpid()}, idx: {idx}, Cache miss")
+            filename = self._read_instructions[idx].filename
+            reader = array_record_module.ArrayRecordReader(
+                filename,
+                options=self._options,
+            )
+            self._cache[idx] = reader
+            if len(self._cache) > 10:
+                self._cache.popitem(last=False)
+            return reader
 
         def __setitem__(self, idx, value):
             pass
@@ -113,6 +122,12 @@ try:
 
     class _PatchedArrayRecordDataSource(_OriginalArrayRecordDataSource):
         def __init__(self, paths):
+            resource.setrlimit(resource.RLIMIT_NOFILE, (524288, 524288))
+            resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+            logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NOFILE))
+            logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NPROC))
+            logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_STACK))
+            logging.info("Resource usage: %s", resource.getrusage(resource.RUSAGE_SELF))
             super().__init__(paths)
             self._reader_options_string = "readahead_buffer_size:0,max_parallelism:0"
             self._readers = _EphemeralReaders(self._read_instructions, self._reader_options_string)
@@ -1009,6 +1024,8 @@ def mixture_train_input_source(
                 with fs.open(features_json) as f:
                     features_dict = tfds.features.FeaturesDict.from_json(json.load(f))
                 source_ds = source_ds.map(features_dict.deserialize_example_np)
+                # source_ds = source_ds.batch(64).shuffle().repeat().to_iter_dataset(read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=0))
+                # source_ds = unbatch(source_ds)
 
             # # Apply preprocessing
             # def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
@@ -1035,13 +1052,31 @@ def mixture_train_input_source(
             except (AttributeError, ValueError):
                 pass
 
-            # source_ds = source_ds.to_iter_dataset(read_options=grain.ReadOptions(num_threads=4, prefetch_buffer_size=4))
+            # This shows improved performance at low scale but too high of memory usage at high scale.
+            # source_ds = source_ds.to_iter_dataset(read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=16))
             sources.append(source_ds)
             weights.append(component.weight)
 
         # Mix the datasets
         mixed_ds = sample_from_datasets(sources=sources, weights=weights)
 
+        # from grain.experimental import multithread_prefetch
+        mixed_ds = mixed_ds.to_iter_dataset(read_options=grain.ReadOptions(num_threads=40, prefetch_buffer_size=500))
+        # mixed_ds = multithread_prefetch(
+        #     mixed_ds,
+        #     num_threads=50,
+        #     buffer_size=5,
+        #     sequential_slice=True,
+        # )
+        # mixed_ds = prefetch_dataset(
+        #     mixed_ds,
+        #     multiprocessing_options=grain.MultiprocessingOptions(
+        #         num_workers=16,
+        #         per_worker_buffer_size=128,
+        #         enable_profiling=False,
+        #     ),
+        # )
+        
         # Apply preprocessing
         def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
             return maybe_set_config(
@@ -1076,14 +1111,15 @@ def mixture_train_input_source(
         #     ),
         # )
         mixed_ds = mixed_ds.batch(gbs)
-        # mixed_ds = prefetch_dataset(
-        #     mixed_ds,
-        #     multiprocessing_options=grain.MultiprocessingOptions(
-        #         num_workers=16,
-        #         per_worker_buffer_size=4,
-        #         enable_profiling=True,
-        #     ),
-        # )
+        # mixed_ds = grain.experimental.ThreadPrefetchIterDataset(parent=mixed_ds, prefetch_buffer_size=16)
+        mixed_ds = prefetch_dataset(
+            mixed_ds,
+            multiprocessing_options=grain.MultiprocessingOptions(
+                num_workers=50,
+                per_worker_buffer_size=4,
+                enable_profiling=False,
+            ),
+        )
         # mixed_ds = grain.experimental.ThreadPrefetchDatasetIterator(parent=mixed_ds, prefetch_buffer_size=4)
         # mixed_ds.start_prefetch()
         return mixed_ds

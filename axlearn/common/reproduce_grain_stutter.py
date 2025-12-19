@@ -132,8 +132,8 @@ def main(_):
         max_len,
         window_size=128,
         max_padding_fraction=1.0,
-        read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=16),
-        packing_fn=input_grain_lm.streaming_packing,
+        read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=0),
+        packing_fn=input_grain_lm.windowed_packing,
     ):
         return lambda ds: input_grain_lm.text_to_lm_training_input(
             ds,
@@ -151,7 +151,7 @@ def main(_):
          window_size=FLAGS.window_size,
          max_padding_fraction=0.5,
          read_options=grain.ReadOptions(num_threads=2, prefetch_buffer_size=0),
-         packing_fn=input_grain_lm.windowed_packing,
+         packing_fn=input_grain_lm.streaming_packing,
     )
 
     # Patch utils.get_data_dir to return our flag

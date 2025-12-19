@@ -750,6 +750,107 @@ class ArrayRecordDatasetTest(TestCase):
             self.assertIsInstance(args[0][0], FileInstruction)
             self.assertEqual(args[0][0].filename, "path/to/data")
 
+    def test_ephemeral_readers_lru_cache(self):
+        # Test the LRU cache in _EphemeralReaders.
+        # We need to simulate the environment where _EphemeralReaders is defined.
+        # It is defined inside a try-except block in input_grain.py, so we need to access it somewhat indirectly
+        # or mock the whole module structure if we want to test it in isolation.
+        # However, we can access it via the patched ArrayRecordDataSource if we mock imports.
+
+        # Let's import the class directly from input_grain if available (it is private but accessible).
+        from axlearn.common import input_grain
+        
+        # We need to mock array_record_module.ArrayRecordReader to verify instantiation counts.
+        with mock.patch("axlearn.common.input_grain.array_record_module") as mock_ar_module:
+             # Create a mock class for ArrayRecordReader
+            MockReader = mock.Mock()
+            mock_ar_module.ArrayRecordReader = MockReader
+
+            # Now we can instantiate _EphemeralReaders.
+            # It expects read_instructions which is a list-like object with .filename attributes.
+            class MockInstruction:
+                def __init__(self, i):
+                    self.filename = f"file_{i}"
+
+            instructions = [MockInstruction(i) for i in range(200)]
+            # We access _EphemeralReaders from input_grain.
+            # Note: _EphemeralReaders is defined inside the try-except block. 
+            # If array_record is not installed, it might not be defined.
+            # But the test file imports input_grain, and we assume array_record is mocked or installed for tests.
+            # Actually, looking at input_grain.py, _EphemeralReaders is local to the try block?
+            # No, it is defined in the try block but attached to the module scope via monkeypatching?
+            # Wait, `class _EphemeralReaders` is defined inside `try`. 
+            # We can access it via `input_grain._EphemeralReaders` if the import succeeded.
+            # If not, we might need to skip.
+            if not hasattr(input_grain, "_EphemeralReaders"):
+                # If we are in an environment without array_record, maybe we should skip?
+                # But we want to verify the logic.
+                # Let's assume it is available or we can find it.
+                # For this test, let's look for it in the module dict if needed, or just assume it is there.
+                # If it's not there, it means 'try' failed.
+                pass
+            
+            # Since we can't easily import a class defined inside a try block if the try failed,
+            # but usually tests run in an env where dependencies are mocked or present.
+            # If input_grain loaded successfully, check if _EphemeralReaders is there.
+            
+            # Actually, `from axlearn.common.input_grain import _EphemeralReaders` might work if exposed.
+            # It is not in `__all__` but it is at module level scope inside the script? 
+            # No, it is inside `try`. If `try` succeeds, it is in `locals()`.
+            
+            # Let's try to get it from `input_grain` assuming the test env has the requirements.
+            EphemeralReaders = getattr(input_grain, "_EphemeralReaders", None)
+            if EphemeralReaders is None:
+                 # If we can't find it, we can't test it.
+                 # This might happen if array_record is missing.
+                 return
+
+            readers = EphemeralReaders(instructions, options="")
+            
+            # 1. Cache Miss & Hit
+            # Access index 0.
+            r0 = readers[0]
+            MockReader.assert_called_with("file_0", options="")
+            self.assertEqual(MockReader.call_count, 1)
+            
+            # Access index 0 again - should be cached.
+            r0_2 = readers[0]
+            self.assertIs(r0, r0_2)
+            self.assertEqual(MockReader.call_count, 1)
+
+            # 2. LRU Eviction behavior
+            # Capacity is 100. We already have 1 item (index 0).
+            # Let's add 99 more items (indices 1 to 99).
+            for i in range(1, 100):
+                _ = readers[i]
+            
+            self.assertEqual(len(readers._cache), 100)
+            self.assertEqual(MockReader.call_count, 100)
+            
+            # Access index 0 again. It should be MRU now, so it shouldn't be evicted next.
+            _ = readers[0] 
+            
+            # Add one more item (index 100). Total accessed: 0..100. 
+            # Cache size is 100. 
+            # We accessed 0 recently, so 0 is MRU.
+            # The indices added were 1, 2, ... 99. 
+            # 1 is the LRU.
+            _ = readers[100]
+            self.assertEqual(len(readers._cache), 100)
+            
+            # Index 1 should have been evicted.
+            # Index 0 should still be there.
+            
+            # Check if 0 is still cached (no new call).
+            MockReader.reset_mock()
+            _ = readers[0]
+            MockReader.assert_not_called()
+            
+            # Check if 1 is evicted (new call).
+            _ = readers[1]
+            MockReader.assert_called_with("file_1", options="")
+
+
 
 if __name__ == "__main__":
     absltest.main()
