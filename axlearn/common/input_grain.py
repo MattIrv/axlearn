@@ -1115,7 +1115,7 @@ def mixture_train_input_source(
         mixed_ds = prefetch_dataset(
             mixed_ds,
             multiprocessing_options=grain.MultiprocessingOptions(
-                num_workers=50,
+                num_workers=150,
                 per_worker_buffer_size=4,
                 enable_profiling=False,
             ),

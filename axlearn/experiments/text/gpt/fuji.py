@@ -347,8 +347,9 @@ def get_trainer_kwargs(
             learner_kwargs=dict(peak_lr=3e-4, weight_decay=0.1),
             max_sequence_length=max_sequence_length,
             train_batch_size=train_batch_size,
-            max_step=max_step,
-            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=16),
+            # max_step=max_step,
+            max_step=5000,
+            mesh_shape=mesh_shape_from_axes(data=-1, fsdp=4),
             mesh_rules=(
                 (
                     "neuron-(trn2|trn2n).48xlarge-64",

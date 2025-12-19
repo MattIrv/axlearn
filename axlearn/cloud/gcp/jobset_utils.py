@@ -93,7 +93,7 @@ class GCSFuseMount(VolumeMount):
     cpu: str = "25000m"
     memory: str = "5Gi"
     ephemeral_gb: str = "5Gi"
-    shared_memory: str = "5Gi"
+    shared_memory: str = "20Gi"
     http_client_timeout: str = "500ms"
 
 
