@@ -173,7 +173,7 @@ def get_trainer_config(
 
 def run_trainer(trainer_config: SpmdTrainer.Config) -> Any:
     measurement.record_event(measurement.Event.START_JOB)
-    resource.setrlimit(resource.RLIMIT_NOFILE, (524288, 524288))
+    # resource.setrlimit(resource.RLIMIT_NOFILE, (524288, 524288))
     logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NOFILE))
     logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NPROC))
     logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_STACK))

@@ -73,8 +73,9 @@ try:
 
     class _PatchedArrayRecordReader(_OriginalArrayRecordReader):
         def __init__(self, path, options="", **kwargs):
-            # if path.startswith("gs://"):
-            if True:
+            # Enabling this for file paths doesn't appear to make a difference
+            if path.startswith("gs://"):
+                # if True:
                 # Increase buffer size to 16MB for GCS.
                 # if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 1 * 1024 * 1024:
                 kwargs["file_reader_buffer_size"] = 0
@@ -89,31 +90,32 @@ try:
 
     array_record_module.ArrayRecordReader = _PatchedArrayRecordReader
 
+    class _ReaderContext:
+        def __init__(self, filename, options):
+            self._filename = filename
+            self._options = options
+            self._reader = None
+
+        def __enter__(self):
+            self._reader = array_record_module.ArrayRecordReader(
+                self._filename,
+                options=self._options,
+            )
+            return self._reader
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            if self._reader:
+                self._reader.close()
+            self._reader = None
+
     class _EphemeralReaders:
         def __init__(self, read_instructions, options):
             self._read_instructions = read_instructions
             self._options = options
-            self._cache = collections.OrderedDict()
 
         def __getitem__(self, idx):
-            if idx in self._cache:
-                # print(f"pid: {os.getpid()}, idx: {idx}, Cache hit")
-                self._cache.move_to_end(idx)
-                return self._cache[idx]
-
-            # print(f"pid: {os.getpid()}, idx: {idx}, Cache miss")
             filename = self._read_instructions[idx].filename
-            reader = array_record_module.ArrayRecordReader(
-                filename,
-                options=self._options,
-            )
-            self._cache[idx] = reader
-            if len(self._cache) > 10:
-                self._cache.popitem(last=False)
-            return reader
-
-        def __setitem__(self, idx, value):
-            pass
+            return _ReaderContext(filename, self._options)
 
         def __len__(self):
             return len(self._read_instructions)
@@ -122,8 +124,9 @@ try:
 
     class _PatchedArrayRecordDataSource(_OriginalArrayRecordDataSource):
         def __init__(self, paths):
-            resource.setrlimit(resource.RLIMIT_NOFILE, (524288, 524288))
-            resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+            # It appears these don't make a difference, but increase the if threads can't start.
+            # resource.setrlimit(resource.RLIMIT_NOFILE, (524288, 524288))
+            # resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
             logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NOFILE))
             logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NPROC))
             logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_STACK))
@@ -134,6 +137,29 @@ try:
 
         def _ensure_reader_exists(self, reader_idx: int) -> None:
             pass
+
+        def __getitem__(self, record_key):
+            reader_idx, position = self._reader_idx_and_position(record_key)
+            with self._readers[reader_idx] as reader:
+                if hasattr(reader, "read"):
+                    return reader.read([position])[0]
+                return reader[position]
+
+        def __getitems__(self, record_keys):
+            positions_and_indices = self._split_keys_per_reader(record_keys)
+            results = [None] * len(record_keys)
+
+            for reader_idx, pos_and_inds in positions_and_indices.items():
+                with self._readers[reader_idx] as reader:
+                    positions = [p for p, _ in pos_and_inds]
+                    if hasattr(reader, "read"):
+                        records = reader.read(positions)
+                    else:
+                        records = [reader[p] for p in positions]
+
+                    for record, (_, original_idx) in zip(records, pos_and_inds):
+                        results[original_idx] = record
+            return results
 
         def __setstate__(self, state):
             super().__setstate__(state)
@@ -1068,10 +1094,11 @@ def mixture_train_input_source(
         #     buffer_size=5,
         #     sequential_slice=True,
         # )
+        # Doesn't start reliably when using this:
         # mixed_ds = prefetch_dataset(
         #     mixed_ds,
         #     multiprocessing_options=grain.MultiprocessingOptions(
-        #         num_workers=16,
+        #         num_workers=50,
         #         per_worker_buffer_size=128,
         #         enable_profiling=False,
         #     ),
@@ -1115,7 +1142,7 @@ def mixture_train_input_source(
         mixed_ds = prefetch_dataset(
             mixed_ds,
             multiprocessing_options=grain.MultiprocessingOptions(
-                num_workers=150,
+                num_workers=50,
                 per_worker_buffer_size=4,
                 enable_profiling=False,
             ),
