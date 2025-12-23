@@ -95,7 +95,7 @@ class GCSFuseMount(VolumeMount):
     ephemeral_gb: str = "5Gi"
     shared_memory: str = "20Gi"
     # shared_memory: str = "5Gi"
-    http_client_timeout: str = "500ms"
+    http_client_timeout: str = "0s"
 
 
 @dataclass(kw_only=True)
