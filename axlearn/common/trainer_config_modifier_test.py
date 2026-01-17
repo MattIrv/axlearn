@@ -2,13 +2,14 @@
 
 """Test various ConfigModifier classes in trainer_config_modifier.py."""
 
+from typing import Any
 import jax
 from absl.testing import absltest, parameterized
 
 from axlearn.common import causal_lm, test_utils
 from axlearn.common.attention import RepeatedTransformerLayer, StackedTransformerLayer
 from axlearn.common.base_layer import RematSpec
-from axlearn.common.config import config_for_function
+from axlearn.common.config import Configurable, config_class, ConfigOr, config_for_function
 from axlearn.common.optimizers import sgd_optimizer
 from axlearn.common.quantized_dot_general.layers import get_all_fp8_param_names
 from axlearn.common.trainer import SpmdTrainer
@@ -21,6 +22,7 @@ from axlearn.common.trainer_config_modifier import (
     OverrideInplaceUpdateTransformation,
     PartitionSpecModifier,
     RematSpecModifier,
+    GrainConfigModifier,
 )
 from axlearn.common.trainer_test import DummyModel
 
@@ -207,6 +209,66 @@ class FP8ConfigModifierTest(test_utils.TestCase):
             [f".*/{x}" for x in get_all_fp8_param_names()],
         )
         self.assertEqual(cfg.model.linear.quantized_dot_general.fp8_amax_history_length, 1)
+
+
+class DummyPreprocessor(Configurable):
+    @config_class
+    class Config(Configurable.Config):
+        max_padding_fraction: float = 0.5
+        window_size: int = 128
+        read_options: Any = None
+
+class DummySource(Configurable):
+    @config_class
+    class Config(Configurable.Config):
+        data_mixture_components: list = []
+        vocab_cfg: ConfigOr[Configurable] = None
+        max_sequence_length: int = 1024
+        preprocessor: ConfigOr[Configurable] = None
+        replace_newlines_with: str = "<br>"
+
+class DummyInput(Configurable):
+    @config_class
+    class Config(Configurable.Config):
+        source: ConfigOr[Configurable] = None
+
+from axlearn.common import input_grain
+
+class GrainConfigModifierTest(test_utils.TestCase):
+    def test_grain_config_modifier(self):
+        cfg = SpmdTrainer.default_config().set(model=DummyModel.default_config())
+        cfg.input = DummyInput.default_config()
+        cfg.input.source = DummySource.default_config()
+        cfg.input.source.preprocessor = DummyPreprocessor.default_config()
+
+        # Manually mock mixture_train_input_source
+        original_mixture_source = input_grain.mixture_train_input_source
+        captured_kwargs = {}
+
+        def mock_mixture_source(**kwargs):
+            captured_kwargs.update(kwargs)
+            return lambda x: x
+
+        input_grain.mixture_train_input_source = mock_mixture_source
+
+        try:
+            cfg_modifier = (
+                GrainConfigModifier.default_config()
+                .set(
+                    convert_training_input=True,
+                    num_threads=4,
+                    prefetch_buffer_size=32,
+                )
+                .instantiate()
+            )
+            cfg = cfg_modifier(cfg)
+            
+            # Check if read_options are correctly set in the preprocessor
+            preprocessor = captured_kwargs["preprocessor"]
+            self.assertEqual(preprocessor.read_options.num_threads, 4)
+            self.assertEqual(preprocessor.read_options.prefetch_buffer_size, 32)
+        finally:
+            input_grain.mixture_train_input_source = original_mixture_source
 
 
 if __name__ == "__main__":

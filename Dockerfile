@@ -27,13 +27,17 @@ WORKDIR /root
 # Introduce the minimum set of files for install.
 RUN mkdir axlearn && touch axlearn/__init__.py
 # Setup venv to suppress pip warnings.
-ENV VIRTUAL_ENV=/opt/venv
-RUN python3 -m venv $VIRTUAL_ENV
-ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-# Install dependencies.
+RUN python3 -m venv /opt/venv1
+ENV PATH="/opt/venv1/bin:$PATH"
 RUN pip install -qq --upgrade pip && \
     pip install -qq uv flit && \
     pip cache purge
+ENV VIRTUAL_ENV=/opt/venv
+RUN uv venv --python 3.12 $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+# Install dependencies.
+RUN uv pip install -qq flit && \
+    uv cache clean
 
 ################################################################################
 # CI container spec.                                                           #

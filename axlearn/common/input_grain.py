@@ -33,6 +33,7 @@ On `repeat` and `shuffle`:
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Protocol, Sequence, TypeVar, Union, runtime_checkable
 
@@ -41,10 +42,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from absl import logging
-from array_record.python.array_record_data_source import PathLikeOrFileInstruction
+from array_record.python.array_record_data_source import PathLikeOrFileInstruction, FileInstruction
 from grain._src.python.data_loader import _determine_worker_count
 from grain._src.python.dataset import dataset as dataset_base
 from jax.experimental import multihost_utils
+
 
 from axlearn.common import file_system as fs
 from axlearn.common import input_base, utils
@@ -57,6 +59,33 @@ from axlearn.common.config import (
     maybe_instantiate,
 )
 from axlearn.common.module import Module
+
+try:
+    from array_record.python import array_record_module
+
+    # Monkeypatch ArrayRecordReader to improve performance on GCS.
+    # The default buffer size (often 32KB or 1MB) is too small for GCS latency.
+    # We also disable readahead by default for GCS to speed up initialization (footer reads).
+    _OriginalArrayRecordReader = array_record_module.ArrayRecordReader
+
+    class _PatchedArrayRecordReader(_OriginalArrayRecordReader):
+        def __init__(self, path, options="", **kwargs):
+            if path.startswith("gs://"):
+                # Increase buffer size to 16MB for GCS.
+                if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 4 * 1024 * 1024:
+                    kwargs["file_reader_buffer_size"] = 16 * 1024 * 1024
+
+                # Disable readahead if not specified (optimizes random access/initialization).
+                if "readahead_buffer_size" not in options:
+                    if options:
+                        options += ",readahead_buffer_size:0"
+                    else:
+                        options = "readahead_buffer_size:0"
+            super().__init__(path, options=options, **kwargs)
+
+    array_record_module.ArrayRecordReader = _PatchedArrayRecordReader
+except ImportError:
+    pass
 
 Dataset = Union[grain.MapDataset, grain.IterDataset]
 _T = TypeVar("_T")
@@ -157,11 +186,21 @@ def _ragged_batch_size(tensor: Union[Tensor, RaggedTensor]) -> int:  # type: ign
         raise NotImplementedError(type(tensor))
 
 
+class FileInstruction:
+    def __init__(self, filename: str, skip: int, take: int, examples_in_shard: int):
+        self.filename = filename
+        self.skip = skip
+        self.take = take
+        self.examples_in_shard = examples_in_shard
+
+
 def array_record_dataset(
     paths: Union[PathLikeOrFileInstruction, Sequence[PathLikeOrFileInstruction]],
     *,
     data_source_cls: type[grain.ArrayRecordDataSource] = grain.ArrayRecordDataSource,
     seed: Optional[int],
+    enable_broadcast_instructions: bool = True,
+    cache_broadcast_instructions_file: bool = True,
 ) -> Dataset:
     """Builds an ArrayRecord dataset.
 
@@ -174,11 +213,81 @@ def array_record_dataset(
             pass `FileInstruction`s.
         data_source_cls: A class reference to a subclass of ArrayRecordDataSource.
         seed: Seed for any downstream transformations (e.g. `shuffle` or `random_map`).
+        enable_broadcast_instructions: Whether to broadcast file instructions from rank 0 to all
+            other ranks. This is useful when the number of files is large and reading them on all
+            ranks is slow.
+        cache_broadcast_instructions_file: Whether to cache the broadcast instructions to a file.
+            If True, rank 0 will attempt to read the instructions from a file in the same directory
+            as the first path. If the file does not exist, it will be created. This is useful to
+            save time on subsequent runs.
 
     Returns:
         An ArrayRecord dataset.
     """
-    source = data_source_cls(paths)
+    if not isinstance(paths, Sequence):
+        paths = [paths]
+    paths = sorted(paths)
+    if enable_broadcast_instructions:
+        file_instructions_broadcast = jax.numpy.zeros([len(paths), 4], dtype=jax.numpy.int32)
+        if jax.process_index() == 0:
+            # Try to read from cache if enabled.
+            cache_path = None
+            if cache_broadcast_instructions_file and len(paths) > 0:
+                first_path = os.fspath(paths[0])
+                if isinstance(paths[0], FileInstruction):
+                    first_path = paths[0].filename
+                cache_path = os.path.join(
+                    os.path.dirname(first_path), "cached_instructions.json"
+                )
+
+            file_instructions = None
+            if cache_path and fs.exists(cache_path):
+                try:
+                    logging.info("Reading cached file instructions from %s", cache_path)
+                    with fs.open(cache_path, "r") as f:
+                        file_instructions = json.load(f)
+                except Exception as e:  # pylint: disable=broad-except
+                    logging.warning("Failed to read cached file instructions: %s", e)
+
+            if file_instructions is None:
+                index_map = {os.fspath(paths[i]): i for i in range(len(paths))}
+                source = data_source_cls(paths)
+                read_instructions = source._read_instructions
+                file_instructions = [
+                    [
+                        index_map[inst.filename],
+                        inst.start,
+                        inst.end - inst.start,
+                        inst.num_records,
+                    ]
+                    for inst in read_instructions
+                ]
+                if cache_path:
+                    try:
+                        logging.info("Writing file instructions to cache %s", cache_path)
+                        with fs.open(cache_path, "w") as f:
+                            json.dump(file_instructions, f)
+                    except Exception as e:  # pylint: disable=broad-except
+                        logging.warning("Failed to write cached file instructions: %s", e)
+
+            file_instructions_broadcast = jax.numpy.array(file_instructions)
+            logging.info(f"On rank 0, len(file_instructions) is {len(file_instructions)}")
+        file_instructions_broadcast = jax.experimental.multihost_utils.broadcast_one_to_all(
+            file_instructions_broadcast
+        )
+
+        file_instructions = [
+            FileInstruction(
+                filename=paths[item[0].item()],
+                skip=item[1].item(),
+                take=item[2].item(),
+                examples_in_shard=item[3].item(),
+            )
+            for item in file_instructions_broadcast
+        ]
+        source = data_source_cls(file_instructions)
+    else:
+        source = data_source_cls(paths)
     ds = grain.MapDataset.source(source)
     if seed is not None:
         ds = ds.seed(seed)
@@ -407,6 +516,9 @@ def maybe_to_iter_dataset(
     ds: Dataset,
     *,
     read_options: ConfigOr[grain.ReadOptions] = config_for_class(grain.ReadOptions),
+    # We find that the below has no effect. Adding a print to the if statement shows this code is never called
+    # or at least never takes the isinstance(mapdataset) branch when running our fuji experiment.
+    # read_options: ConfigOr[grain.ReadOptions] = grain.ReadOptions(num_threads=16, prefetch_buffer_size=500),
 ) -> grain.IterDataset:
     """Converts `grain.MapDataset` to `grain.IterDataset`.
 
@@ -422,6 +534,7 @@ def maybe_to_iter_dataset(
     """
     read_options = maybe_instantiate(read_options)
     if isinstance(ds, grain.MapDataset):
+        logging.info(f"Converting dataset with read options: num_threads:{read_options.num_threads}, prefetch_buffer_size:{read_options.prefetch_buffer_size}")
         ds = ds.to_iter_dataset(read_options)
     return ds
 
@@ -779,6 +892,7 @@ def mixture_train_input_source(
     replace_newlines_with: str = "<n>",
     fake_input_source_cfg: Optional[ConfigOr] = None,
     seed: Optional[int] = 42,
+    enable_broadcast_instructions: bool = True,
 ) -> BuildDatasetFn:
     """Build mixture training input source for decoder-only LM model using grain.
     Mixture sampling happens after input processing but before batching, meaning that each batch
@@ -822,14 +936,24 @@ def mixture_train_input_source(
                         "Please provide a fake_input_source_cfg instead."
                     )
                 glob_pattern = os.path.join(data_dir, dataset_name, "*array_record*")
+                start_time = time.time()
                 arrayrecord_files = fs.glob(glob_pattern)
+                logging.info(
+                    "Glob %s took %.2f seconds.", glob_pattern, time.time() - start_time
+                )
                 if not arrayrecord_files:
                     raise ValueError(f"No files found for pattern {glob_pattern}")
                 arrayrecord_dataset_dir = os.path.dirname(arrayrecord_files[0])
 
                 # Create ArrayRecord dataset
                 source_ds = (
-                    array_record_dataset(paths=arrayrecord_files, seed=seed).shuffle().repeat()
+                    array_record_dataset(
+                        paths=arrayrecord_files,
+                        seed=seed,
+                        enable_broadcast_instructions=enable_broadcast_instructions,
+                    )
+                    .shuffle()
+                    .repeat()
                 )
                 source_ds = shard_dataset(source_ds, dispatch_config)
                 #
@@ -880,6 +1004,15 @@ def mixture_train_input_source(
         gbs = dispatch_config.batch_size
         if gbs is None:
             gbs = len(jax.devices())
-        return mixed_ds.batch(gbs)
+        mixed_ds = mixed_ds.batch(gbs)
+        mixed_ds = prefetch_dataset(
+            mixed_ds,
+            multiprocessing_options=grain.MultiprocessingOptions(
+                num_workers=4,
+                per_worker_buffer_size=1,
+                enable_profiling=False,
+            ),
+        )
+        return mixed_ds
 
     return build_dataset_fn

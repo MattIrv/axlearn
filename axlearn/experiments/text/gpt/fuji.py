@@ -32,6 +32,8 @@ from axlearn.common.attention import (
     StackedTransformerLayer,
 )
 from axlearn.common.base_layer import RematSpec
+from absl import logging
+from axlearn.common import config, input_grain
 from axlearn.common.config import TrainerConfigFn, config_for_function
 from axlearn.common.decoder import LmHead
 from axlearn.common.embedding import TransformerTextEmbeddings
@@ -319,7 +321,7 @@ def get_trainer_kwargs(
                 shared_lm_head=True,
                 flash_attention=flash_attention,
             ),
-            learner_kwargs=dict(peak_lr=6e-4, weight_decay=0.01),
+            learner_kwargs=dict(peak_lr=6e-4, weight_decay=0.01, lr_warmup_steps=0),
             max_sequence_length=64,
             train_batch_size=32,
             eval_batch_size=32,
@@ -984,8 +986,11 @@ def model_config(
 
 
 def trainer_configs(
-    train_input_source: SourceBuilder, eval_input_sources: SourceBuilder
+    train_input_source: SourceBuilder,
+    eval_input_sources: SourceBuilder,
+    enable_broadcast_instructions: bool = True,
 ) -> dict[str, TrainerConfigFn]:
+    default_enable_broadcast_instructions = enable_broadcast_instructions
     """Returns a mapping from config_name to TrainerConfigFn's.
 
     Args:
@@ -1011,7 +1016,7 @@ def trainer_configs(
         )
         max_sequence_length = kwargs.pop("max_sequence_length")
         # pylint: disable-next=unexpected-keyword-arg,missing-kwoa
-        config_map[config_name] = get_trainer_config_fn(
+        config_fn = get_trainer_config_fn(
             train_input_source=train_input_source(
                 vocab_size=vocab_size,
                 max_sequence_length=max_sequence_length,
@@ -1021,6 +1026,20 @@ def trainer_configs(
             ),
             **kwargs,
         )
+        if model_size == "test":
+
+            def wrapper(config_fn=config_fn, **kwargs):
+                trainer_cfg = config_fn()
+                if "test_batch_size" in kwargs:
+                    test_batch_size = int(kwargs["test_batch_size"])
+                    trainer_cfg.input.input_dispatcher.global_logical_batch_size = test_batch_size
+                    for evaler in trainer_cfg.evalers.values():
+                        evaler.input.input_dispatcher.global_logical_batch_size = test_batch_size
+                return trainer_cfg
+
+            config_map[config_name] = wrapper
+        else:
+            config_map[config_name] = config_fn
 
         def make_fp8_config(base_config_name: str) -> SpmdTrainer.Config:
             """Make a FP8 variant of the base config.
@@ -1147,12 +1166,16 @@ def trainer_configs(
         )
 
         def set_sleep_seconds(
-            sleep_seconds: float = 1.0,
+            sleep_seconds: float = 0.3,
             *,
             base_cfg_fn: TrainerConfigFn = base_sleep_config_fn,
+            model_size=model_size,
+            **kwargs,
         ) -> SleepTrainer.Config:
             cfg: SleepTrainer.Config = base_cfg_fn()
             cfg.sleep_seconds = sleep_seconds
+            if model_size == "test" and "test_batch_size" in kwargs:
+                cfg.input.input_dispatcher.global_logical_batch_size = int(kwargs["test_batch_size"])
             return cfg
 
         config_map[sleep_config_name] = set_sleep_seconds
@@ -1160,25 +1183,56 @@ def trainer_configs(
     grain_config_map = {}
     for config_name in config_map:
 
-        def make_grain_config(base_config_name: str) -> SpmdTrainer.Config:
+        def make_grain_config(
+            base_config_name: str,
+            enable_broadcast_instructions: Optional[bool] = None,
+            dataset_repeats: int = 1,
+            num_threads: int = 2,
+            prefetch_buffer_size: int = 0,
+            **kwargs,
+        ) -> SpmdTrainer.Config:
             """Make a grain input processor variant of the base config.
             This configuration uses the grain input processing framework for
             improved data loading and preprocessing performance.
             Args:
                 base_config_name: The base config name.
+                enable_broadcast_instructions: Whether to enable broadcast instructions.
+                    If None, uses the value from the outer scope.
+                dataset_repeats: The number of times to repeat the dataset.
+                num_threads: The number of threads to use for reading data.
+                prefetch_buffer_size: The size of the prefetch buffer.
+                **kwargs: Additional arguments to pass to the config function.
             Returns:
                 A trainer config that uses grain input processing.
             """
+            if enable_broadcast_instructions is None:
+                # pylint: disable-next=cell-var-from-loop
+                enable_broadcast_instructions = default_enable_broadcast_instructions
 
             # pytype: disable=annotation-type-mismatch
-            cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
+            try:
+                cfg: SpmdTrainer.Config = config_map[base_config_name](**kwargs).clone()
+            except TypeError:
+                cfg: SpmdTrainer.Config = config_map[base_config_name]().clone()
             # pytype: enable=annotation-type-mismatch
 
             # Apply grain config modifier to convert tf.data to Grain
             grain_modifier = GrainConfigModifier.default_config().set(
                 convert_training_input=True,
+                enable_broadcast_instructions=enable_broadcast_instructions,
+                num_threads=num_threads,
+                prefetch_buffer_size=prefetch_buffer_size,
             )
             cfg = grain_modifier.instantiate()(cfg)
+
+            if dataset_repeats > 1:
+                if hasattr(cfg.input.source, "data_mixture_components"):
+                    cfg.input.source.data_mixture_components *= dataset_repeats
+                else:
+                    logging.warning(
+                        "dataset_repeats > 1 but cfg.input.source.data_mixture_components not found."
+                    )
+
             return cfg
 
         # Make grain config

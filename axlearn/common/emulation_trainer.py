@@ -67,7 +67,7 @@ class SleepTrainer(SpmdTrainer):
 
         # 4. Standard logging and checkpointing (simplified from SpmdTrainer).
         n = self._config.log_every_n_steps or 100
-        if self.step % n == 0 or 0 <= self.step <= 5:
+        if self.step % n == 0 or 0 <= self.step <= 3000:
             self._step_log("loss=%s", outputs["loss"])
 
         self.summary_writer(self.step, {"loss": outputs["loss"], **outputs["summaries"]})

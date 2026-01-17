@@ -3,6 +3,8 @@
 """Tests grain inputs."""
 
 import copy
+import json
+import os
 from functools import partial
 from typing import Optional, Protocol
 from unittest import mock
@@ -12,6 +14,7 @@ import jax
 import numpy as np
 from absl import logging
 from absl.testing import absltest, parameterized
+from array_record.python.array_record_data_source import FileInstruction
 from grain._src.core.sharding import even_split
 from jax.sharding import PartitionSpec
 
@@ -34,6 +37,7 @@ from axlearn.common.input_grain import (
     shard_dataset,
     shard_dataset_with_proportion,
     unbatch,
+    array_record_dataset,
 )
 from axlearn.common.test_utils import TestCase
 
@@ -676,5 +680,85 @@ class InputTest(parameterized.TestCase):
         )
 
 
+class ArrayRecordDatasetTest(TestCase):
+    def test_array_record_dataset_cache(self):
+        # Mock fs.
+        with mock.patch("axlearn.common.input_grain.fs") as mock_fs:
+            # Mock exists to return False initially (cache miss).
+            mock_fs.exists.return_value = False
+            # Mock open.
+            mock_open = mock.mock_open()
+            mock_fs.open = mock_open
+
+            # Mock ArrayRecordDataSource.
+            mock_ds_cls = mock.Mock()
+            mock_ds_instance = mock_ds_cls.return_value
+            # Mock _read_instructions.
+            # filename, start, end, num_records
+            mock_inst = mock.Mock()
+            mock_inst.filename = "path/to/data"
+            mock_inst.start = 0
+            mock_inst.end = 100
+            mock_inst.num_records = 10
+            mock_ds_instance._read_instructions = [mock_inst]
+
+            paths = ["path/to/data"]
+
+            # Test cache miss (write to cache).
+            with mock.patch("jax.process_index", return_value=0):
+                array_record_dataset(
+                    paths,
+                    data_source_cls=mock_ds_cls,
+                    seed=123,
+                    enable_broadcast_instructions=True,
+                    cache_broadcast_instructions_file=True,
+                )
+
+            # Verify check for existence.
+            mock_fs.exists.assert_called_with("path/to/cached_instructions.json")
+            # Verify write.
+            mock_open.assert_called_with("path/to/cached_instructions.json", "w")
+            handle = mock_open()
+            # We expect json dump to be called.
+            self.assertTrue(handle.write.called)
+
+            # Test cache hit (read from cache).
+            mock_fs.exists.return_value = True
+            # Reset mocks.
+            mock_ds_cls.reset_mock()
+            mock_open.reset_mock()
+
+            # Mock json.load to return the instructions.
+            with mock.patch("json.load", return_value=[[0, 0, 100, 10]]):
+                 with mock.patch("jax.process_index", return_value=0):
+                    array_record_dataset(
+                        paths,
+                        data_source_cls=mock_ds_cls,
+                        seed=123,
+                        enable_broadcast_instructions=True,
+                        cache_broadcast_instructions_file=True,
+                    )
+
+            # Verify read.
+            mock_open.assert_called_with("path/to/cached_instructions.json", "r")
+            
+            # Verify data source was instantiated with instructions.
+            self.assertEqual(mock_ds_cls.call_count, 1)
+            args, _ = mock_ds_cls.call_args
+            # args[0] should be the file instructions list of FileInstruction objects.
+            self.assertEqual(len(args[0]), 1)
+            self.assertIsInstance(args[0][0], FileInstruction)
+            self.assertEqual(args[0][0].filename, "path/to/data")
+
+
 if __name__ == "__main__":
     absltest.main()
+
+    def test_array_record_reader_monkeypatch(self):
+        # Verify that ArrayRecordReader is monkeypatched.
+        # We check the class name to ensure it's our patched version.
+        try:
+            from array_record.python import array_record_module
+            self.assertEqual(array_record_module.ArrayRecordReader.__name__, "_PatchedArrayRecordReader")
+        except ImportError:
+            pass
