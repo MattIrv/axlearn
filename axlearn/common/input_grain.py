@@ -30,12 +30,15 @@ On `repeat` and `shuffle`:
 * `repeat` with `num_repeat=None` will produce datasets with size `sys.maxsize`.
 """
 
+import collections
 import json
 import os
+import resource
 import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Protocol, Sequence, TypeVar, Union, runtime_checkable
+import traceback
 
 import grain.python as grain
 import jax
@@ -70,10 +73,12 @@ try:
 
     class _PatchedArrayRecordReader(_OriginalArrayRecordReader):
         def __init__(self, path, options="", **kwargs):
+            # Enabling this for file paths doesn't appear to make a difference
             if path.startswith("gs://"):
+                # if True:
                 # Increase buffer size to 16MB for GCS.
-                if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 4 * 1024 * 1024:
-                    kwargs["file_reader_buffer_size"] = 16 * 1024 * 1024
+                # if "file_reader_buffer_size" not in kwargs or kwargs["file_reader_buffer_size"] < 1 * 1024 * 1024:
+                kwargs["file_reader_buffer_size"] = 0
 
                 # Disable readahead if not specified (optimizes random access/initialization).
                 if "readahead_buffer_size" not in options:
@@ -84,6 +89,83 @@ try:
             super().__init__(path, options=options, **kwargs)
 
     array_record_module.ArrayRecordReader = _PatchedArrayRecordReader
+
+    class _ReaderContext:
+        def __init__(self, filename, options):
+            self._filename = filename
+            self._options = options
+            self._reader = None
+
+        def __enter__(self):
+            self._reader = array_record_module.ArrayRecordReader(
+                self._filename,
+                options=self._options,
+            )
+            return self._reader
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            if self._reader:
+                self._reader.close()
+            self._reader = None
+
+    class _EphemeralReaders:
+        def __init__(self, read_instructions, options):
+            self._read_instructions = read_instructions
+            self._options = options
+
+        def __getitem__(self, idx):
+            filename = self._read_instructions[idx].filename
+            return _ReaderContext(filename, self._options)
+
+        def __len__(self):
+            return len(self._read_instructions)
+
+    _OriginalArrayRecordDataSource = grain.ArrayRecordDataSource
+
+    class _PatchedArrayRecordDataSource(_OriginalArrayRecordDataSource):
+        def __init__(self, paths):
+            # It appears these don't make a difference, but increase the if threads can't start.
+            # resource.setrlimit(resource.RLIMIT_NOFILE, (524288, 524288))
+            # resource.setrlimit(resource.RLIMIT_STACK, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
+            logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NOFILE))
+            logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_NPROC))
+            logging.info("Resource limits: %s", resource.getrlimit(resource.RLIMIT_STACK))
+            logging.info("Resource usage: %s", resource.getrusage(resource.RUSAGE_SELF))
+            super().__init__(paths)
+            self._reader_options_string = "readahead_buffer_size:0,max_parallelism:0"
+            self._readers = _EphemeralReaders(self._read_instructions, self._reader_options_string)
+
+        def _ensure_reader_exists(self, reader_idx: int) -> None:
+            pass
+
+        def __getitem__(self, record_key):
+            reader_idx, position = self._reader_idx_and_position(record_key)
+            with self._readers[reader_idx] as reader:
+                if hasattr(reader, "read"):
+                    return reader.read([position])[0]
+                return reader[position]
+
+        def __getitems__(self, record_keys):
+            positions_and_indices = self._split_keys_per_reader(record_keys)
+            results = [None] * len(record_keys)
+
+            for reader_idx, pos_and_inds in positions_and_indices.items():
+                with self._readers[reader_idx] as reader:
+                    positions = [p for p, _ in pos_and_inds]
+                    if hasattr(reader, "read"):
+                        records = reader.read(positions)
+                    else:
+                        records = [reader[p] for p in positions]
+
+                    for record, (_, original_idx) in zip(records, pos_and_inds):
+                        results[original_idx] = record
+            return results
+
+        def __setstate__(self, state):
+            super().__setstate__(state)
+            self._readers = _EphemeralReaders(self._read_instructions, self._reader_options_string)
+
+    grain.ArrayRecordDataSource = _PatchedArrayRecordDataSource
 except ImportError:
     pass
 
@@ -396,7 +478,7 @@ class _UnbatchDatasetIterator(grain.DatasetIterator):
             if batch_size == 0 and self._skip_empty_batch:
                 example = None
             else:
-                assert 0 <= self._index < batch_size, (self._index, batch_size)
+                assert 0 <= self._index < batch_size, (self._index, batch_size, self._current_batch)
                 example = jax.tree.unflatten(structure, (x[self._index] for x in leaves))
             self._index += 1
 
@@ -968,51 +1050,105 @@ def mixture_train_input_source(
                 with fs.open(features_json) as f:
                     features_dict = tfds.features.FeaturesDict.from_json(json.load(f))
                 source_ds = source_ds.map(features_dict.deserialize_example_np)
+                # source_ds = source_ds.batch(64).shuffle().repeat().to_iter_dataset(read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=0))
+                # source_ds = unbatch(source_ds)
 
-            # Apply preprocessing
-            def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
-                return maybe_set_config(
-                    p,
-                    vocab_cfg=vocab_cfg,
-                    max_sequence_length=max_sequence_length,
-                    replace_newlines_with=replace_newlines_with,
-                )
+            # # Apply preprocessing
+            # def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
+            #     return maybe_set_config(
+            #         p,
+            #         vocab_cfg=vocab_cfg,
+            #         max_sequence_length=max_sequence_length,
+            #         replace_newlines_with=replace_newlines_with,
+            #     )
 
-            if isinstance(preprocessor, list):
-                assert len(preprocessor) == len(data_mixture_components)
-                processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
-            else:
-                processor_cfg = _set_config_for_preprocessor(preprocessor)
+            # if isinstance(preprocessor, list):
+            #     assert len(preprocessor) == len(data_mixture_components)
+            #     processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
+            # else:
+            #     processor_cfg = _set_config_for_preprocessor(preprocessor)
 
-            # Apply processor to the source dataset
-            processor_fn = maybe_instantiate(processor_cfg)
-            source_ds = processor_fn(source_ds)
+            # # Apply processor to the source dataset
+            # processor_fn = maybe_instantiate(processor_cfg)
+            # source_ds = processor_fn(source_ds)
 
             # Repeat the dataset for mixing.
             try:
                 source_ds = source_ds.repeat()
-            except AttributeError:
+            except (AttributeError, ValueError):
                 pass
 
+            # This shows improved performance at low scale but too high of memory usage at high scale.
+            # source_ds = source_ds.to_iter_dataset(read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=16))
             sources.append(source_ds)
             weights.append(component.weight)
 
         # Mix the datasets
         mixed_ds = sample_from_datasets(sources=sources, weights=weights)
 
+        # from grain.experimental import multithread_prefetch
+        mixed_ds = mixed_ds.to_iter_dataset(read_options=grain.ReadOptions(num_threads=40, prefetch_buffer_size=500))
+        # mixed_ds = multithread_prefetch(
+        #     mixed_ds,
+        #     num_threads=50,
+        #     buffer_size=5,
+        #     sequential_slice=True,
+        # )
+        # Doesn't start reliably when using this:
+        # mixed_ds = prefetch_dataset(
+        #     mixed_ds,
+        #     multiprocessing_options=grain.MultiprocessingOptions(
+        #         num_workers=50,
+        #         per_worker_buffer_size=128,
+        #         enable_profiling=False,
+        #     ),
+        # )
+        
+        # Apply preprocessing
+        def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
+            return maybe_set_config(
+                p,
+                vocab_cfg=vocab_cfg,
+                max_sequence_length=max_sequence_length,
+                replace_newlines_with=replace_newlines_with,
+            )
+
+        if isinstance(preprocessor, list):
+            assert len(preprocessor) == len(data_mixture_components)
+            processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
+        else:
+            processor_cfg = _set_config_for_preprocessor(preprocessor)
+
+        # Apply processor to the source dataset
+        processor_fn = maybe_instantiate(processor_cfg)
+        mixed_ds = processor_fn(mixed_ds)
+
         # Shard the mixed dataset
         gbs = dispatch_config.batch_size
         if gbs is None:
+            logging.warning("Batch size is not specified, using %d devices.", len(jax.devices()))
             gbs = len(jax.devices())
+        logging.info("Batch size: %d", gbs)
+        # mixed_ds = prefetch_dataset(
+        #     mixed_ds,
+        #     multiprocessing_options=grain.MultiprocessingOptions(
+        #         num_workers=16,
+        #         per_worker_buffer_size=(gbs * 4),
+        #         enable_profiling=True,
+        #     ),
+        # )
         mixed_ds = mixed_ds.batch(gbs)
+        # mixed_ds = grain.experimental.ThreadPrefetchIterDataset(parent=mixed_ds, prefetch_buffer_size=16)
         mixed_ds = prefetch_dataset(
             mixed_ds,
             multiprocessing_options=grain.MultiprocessingOptions(
-                num_workers=4,
-                per_worker_buffer_size=1,
+                num_workers=50,
+                per_worker_buffer_size=4,
                 enable_profiling=False,
             ),
         )
+        # mixed_ds = grain.experimental.ThreadPrefetchDatasetIterator(parent=mixed_ds, prefetch_buffer_size=4)
+        # mixed_ds.start_prefetch()
         return mixed_ds
 
     return build_dataset_fn

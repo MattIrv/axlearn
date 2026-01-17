@@ -5,6 +5,7 @@
 import functools
 import logging
 import sys
+import os
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, Protocol
 
@@ -115,7 +116,10 @@ class _StreamingPackingDatasetIterator(grain.DatasetIterator):
 
     def __next__(self):
         # Iteratively call __next__ until we yield valid examples.
+        o = 0
         while True:
+            # print(f"pid: {os.getpid()}, Outer loop: {o}, current_token_count: {self._current_token_count}, index: {self._index}")
+            o += 1
             # If there are still leftover tokens when we have already reached the window limit, we
             # should decide whether to keep this sequence.
             if self._current_token_count > 0 and self._reach_window_limit():
@@ -125,7 +129,10 @@ class _StreamingPackingDatasetIterator(grain.DatasetIterator):
             # Termination of this while loop means:
             # 1. Reaches the sequence_length limit, and ready to output one batch.
             # 2. Reaches the window limit.
+            i = 0
             while self._current_token_count < self._max_len:
+                # print(f"pid: {os.getpid()}, Inner loop: {i}, current_token_count: {self._current_token_count}, index: {self._index}")
+                i += 1
                 self._parent_sequence_end_state = self._parent.get_state()
                 if not self._parent_sequence_start_state:
                     self._parent_sequence_start_state = self._parent_sequence_end_state
@@ -147,6 +154,7 @@ class _StreamingPackingDatasetIterator(grain.DatasetIterator):
                     break
 
             # If there is enough token, we always return a sequence.
+            # print(f"pid: {os.getpid()}: took {i} iterations to fill up the sequence")
             if self._current_token_count >= self._max_len:
                 return self._pop_element()
 
@@ -331,7 +339,7 @@ def windowed_packing(
         read_options=read_options,
     )
     # After processing, we have non-ragged np.arrays, so we can unbatch.
-    ds = input_grain.unbatch(ds)
+    ds = input_grain.unbatch(ds, skip_empty_batch=True)
     return ds
 
 
@@ -455,9 +463,9 @@ def text_to_lm_training_input(
     if isinstance(ds, MultiprocessPrefetchIterDataset):
         # Dataset types like MultiprocessPrefetchIterDataset have no len() or repeat() function
         logging.info("Skipping repeat for ds: %s`", ds)
-    elif len(ds) != sys.maxsize:
-        # Only repeat if not already infinite.
-        ds = ds.repeat(num_epochs=None)
+    # elif len(ds) != sys.maxsize:
+    #     # Only repeat if not already infinite.
+    #     ds = ds.repeat(num_epochs=None)
     ds = input_grain_text.tokenize(ds, vocab={"text": vocab}, with_eos=True)
     ds = input_grain.rekey(ds, key_map={"target_labels": "text"})
     # Flatten, roll, split.
@@ -550,5 +558,5 @@ def text_to_lm_eval_input(
     )
     ds = ds.map(_drop_empty_targets)
     ds = input_grain.maybe_to_iter_dataset(ds)
-    ds = input_grain.unbatch(ds)
+    ds = input_grain.unbatch(ds, skip_empty_batch=True)
     return ds

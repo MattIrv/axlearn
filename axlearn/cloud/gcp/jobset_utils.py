@@ -90,11 +90,12 @@ class GCSFuseMount(VolumeMount):
     gcs_path: str
     name: str = "gcs-fuse-csi-ephemeral"
     mount_path: str = "/output"
-    cpu: str = "250m"
-    memory: str = "256Mi"
+    cpu: str = "25000m"
+    memory: str = "5Gi"
     ephemeral_gb: str = "5Gi"
-    shared_memory: str = "1Gi"
-    http_client_timeout: str = "0s"
+    shared_memory: str = "20Gi"
+    # shared_memory: str = "5Gi"
+    http_client_timeout: str = "500ms"
 
 
 @dataclass(kw_only=True)
@@ -708,23 +709,23 @@ class TPUJobBuilder(SingleReplicatedJob):
         if cfg.location_hint is not None:
             selector.update({"cloud.google.com/gke-location-hint": str(cfg.location_hint).lower()})
 
-        if cfg.enable_pre_provisioner:
-            # Used by pre-provisioner.
-            selector.update({PRE_PROVISIONER_LABEL: cfg.name})
-        elif tier != "disabled":
-            # Used by GCP auto-provisioner.
-            selector.update(
-                {
-                    # NOTE: This is an arbitrary key, with a value that must be unique to the
-                    # jobset. This forces the jobset to be associated with its own node pool;
-                    # without this, the TPU provisioner may create a node pool and the scheduler may
-                    # schedule a different jobset onto the node pool, which can cause conflicts if
-                    # the original jobset attempts to restart (node pool conflict). This is more
-                    # reliable at the moment but doesn't take advantage of node pool sharing. GCP is
-                    # working on a fix.
-                    "provisioner-nodepool-id": cfg.name,
-                }
-            )
+        # if cfg.enable_pre_provisioner:
+        #     # Used by pre-provisioner.
+        #     selector.update({PRE_PROVISIONER_LABEL: cfg.name})
+        # elif tier != "disabled":
+        #     # Used by GCP auto-provisioner.
+        #     selector.update(
+        #         {
+        #             # NOTE: This is an arbitrary key, with a value that must be unique to the
+        #             # jobset. This forces the jobset to be associated with its own node pool;
+        #             # without this, the TPU provisioner may create a node pool and the scheduler may
+        #             # schedule a different jobset onto the node pool, which can cause conflicts if
+        #             # the original jobset attempts to restart (node pool conflict). This is more
+        #             # reliable at the moment but doesn't take advantage of node pool sharing. GCP is
+        #             # working on a fix.
+        #             "provisioner-nodepool-id": cfg.name,
+        #         }
+        #     )
 
         if os.environ.get(BASTION_JOB_VERSION_ENV_VAR):
             labels.update({BASTION_JOB_VERSION_LABEL: os.environ.get(BASTION_JOB_VERSION_ENV_VAR)})
@@ -780,6 +781,7 @@ class TPUJobBuilder(SingleReplicatedJob):
             nodeSelector={
                 "cloud.google.com/gke-tpu-accelerator": system.gke_accelerator,
                 "cloud.google.com/gke-tpu-topology": cfg.accelerator.topology or system.topology,
+                "cloud.google.com/placement-policy-name": "tpu-provisioner-4x4x8",
                 **selector,
             },
             tolerations=tolerations,
@@ -1721,6 +1723,7 @@ class CPUReplicatedJob(SingleReplicatedJob):
             )
 
         resources = {}
+        resources["requests"] = {"memory": "100Gi"}
 
         return dict(
             name=cfg.name,

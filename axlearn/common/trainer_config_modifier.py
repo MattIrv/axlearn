@@ -18,7 +18,7 @@ from axlearn.common.config import (
 )
 from axlearn.common.gradient_accumulation import with_minibatch_steps
 from axlearn.common.input_grain import Dataset
-from axlearn.common.input_grain_lm import windowed_packing
+from axlearn.common.input_grain_lm import streaming_packing
 from axlearn.common.metrics import MetricAccumulator
 from axlearn.common.quantized_dot_general.layers import (
     DenseGeneralBaseLayer,
@@ -382,7 +382,7 @@ class GrainConfigModifier(ConfigModifier):
             read_options: grain.ReadOptions = grain.ReadOptions(
                 num_threads=1, prefetch_buffer_size=16
             ),
-            packing_fn: Callable = windowed_packing,
+            packing_fn: Callable = streaming_packing,
         ) -> Callable[[Dataset], Dataset]:
             return lambda ds: input_grain_lm.text_to_lm_training_input(
                 ds,

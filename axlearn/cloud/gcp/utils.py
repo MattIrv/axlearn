@@ -196,7 +196,8 @@ def load_kube_config(*, project: str, zone: str, cluster: str):
         get_credentials_cmd = (
             f"gcloud container clusters get-credentials {cluster} "
             f"--region {region} "
-            f"--project {project}"
+            f"--project {project} "
+            # "--dns-endpoint"
         )
         # Automatically generate the kube-config on pod or VM.
         if running_from_k8s() or running_from_vm():

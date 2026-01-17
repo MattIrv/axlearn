@@ -37,7 +37,7 @@ import optax
 import typing_extensions
 from absl import logging
 from jax import numpy as jnp
-from jax._src.sharding_impls import TransferToMemoryKind
+from jax.memory import Space
 from optax._src import numerics
 
 from axlearn.common import flax_struct, schedule
@@ -2145,7 +2145,7 @@ def offload_optimizer(
         # released, so we have less memory pressure at that point in time.
         return jax.tree.map(
             lambda path, tensor: (
-                jax.device_put(tensor, TransferToMemoryKind(dst))
+                jax.device_put(tensor, Space.Device if dst == "device" else Space.Host)
                 if re.fullmatch(pattern, path)
                 else tensor
             ),

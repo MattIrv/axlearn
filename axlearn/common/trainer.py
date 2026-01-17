@@ -313,7 +313,10 @@ class SpmdTrainer(Module):
             self._input_iter = iter(self.input.dataset())
             if isinstance(self._input_iter, grain.DatasetIterator):
                 logging.info("Starting prefetching for input iterator.")
-                self._input_iter.start_prefetch()
+                try:
+                    self._input_iter.start_prefetch()
+                except NotImplementedError:
+                    logging.warning("start_prefetch not implemented for input iterator.")
             cfg.summary_writer.dir = cfg.summary_writer.dir or os.path.join(
                 cfg.dir, "summaries", "train_train"
             )
