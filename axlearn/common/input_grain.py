@@ -975,6 +975,7 @@ def mixture_train_input_source(
     fake_input_source_cfg: Optional[ConfigOr] = None,
     seed: Optional[int] = 42,
     enable_broadcast_instructions: bool = True,
+    pack_after_mixing: bool = True,
 ) -> BuildDatasetFn:
     """Build mixture training input source for decoder-only LM model using grain.
     Mixture sampling happens after input processing but before batching, meaning that each batch
@@ -991,6 +992,11 @@ def mixture_train_input_source(
         fake_input_source_cfg: A config that instantiates to a BuildDatasetFn for the input source
             used during unittest.
         seed: Seed for any downstream transformations (e.g. `shuffle` or `random_map`).
+        enable_broadcast_instructions: Whether to broadcast file instructions from rank 0 to all
+            other ranks.
+        pack_after_mixing: Whether to apply packing (preprocessing) after mixing datasets.
+            If True, packing is applied to the mixed stream.
+            If False, packing is applied to each dataset individually before mixing.
     Returns:
         A BuildDatasetFn that mixes the given list of DataMixtureComponent(s).
     """
@@ -1003,6 +1009,15 @@ def mixture_train_input_source(
     ) -> Dataset:
         sources = []
         weights = []
+
+        # Apply preprocessing
+        def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
+            return maybe_set_config(
+                p,
+                vocab_cfg=vocab_cfg,
+                max_sequence_length=max_sequence_length,
+                replace_newlines_with=replace_newlines_with,
+            )
 
         for component in data_mixture_components:
             if fake_input_source_cfg is not None:
@@ -1053,24 +1068,19 @@ def mixture_train_input_source(
                 # source_ds = source_ds.batch(64).shuffle().repeat().to_iter_dataset(read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=0))
                 # source_ds = unbatch(source_ds)
 
-            # Apply preprocessing
-            def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
-                return maybe_set_config(
-                    p,
-                    vocab_cfg=vocab_cfg,
-                    max_sequence_length=max_sequence_length,
-                    replace_newlines_with=replace_newlines_with,
-                )
+            if not pack_after_mixing:
+                if isinstance(preprocessor, list):
+                    assert len(preprocessor) == len(data_mixture_components)
+                    processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
+                else:
+                    processor_cfg = _set_config_for_preprocessor(preprocessor)
 
-            if isinstance(preprocessor, list):
-                assert len(preprocessor) == len(data_mixture_components)
-                processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
-            else:
-                processor_cfg = _set_config_for_preprocessor(preprocessor)
+                # Apply processor to the source dataset
+                processor_fn = maybe_instantiate(processor_cfg)
+                source_ds = processor_fn(source_ds)
 
-            # Apply processor to the source dataset
-            processor_fn = maybe_instantiate(processor_cfg)
-            source_ds = processor_fn(source_ds)
+                # This shows improved performance at low scale but too high of memory usage at high scale.
+                source_ds = source_ds.to_iter_dataset(read_options=grain.ReadOptions(num_threads=1, prefetch_buffer_size=16))
 
             # Repeat the dataset for mixing.
             try:
@@ -1086,78 +1096,38 @@ def mixture_train_input_source(
         # Mix the datasets
         mixed_ds = sample_from_datasets(sources=sources, weights=weights)
 
-        # mixed_ds = mixed_ds.to_iter_dataset(read_options=grain.ReadOptions(num_threads=40, prefetch_buffer_size=500))
-        # from grain.experimental import multithread_prefetch
-        # mixed_ds = multithread_prefetch(
-        #     mixed_ds,
-        #     num_threads=40,
-        #     buffer_size=12,
-        #     sequential_slice=True,
-        # )
-        # Doesn't start reliably when using this:
-        # mixed_ds = prefetch_dataset(
-        #     mixed_ds,
-        #     multiprocessing_options=grain.MultiprocessingOptions(
-        #         num_workers=50,
-        #         per_worker_buffer_size=128,
-        #         enable_profiling=False,
-        #     ),
-        # )
-        
-        # # Apply preprocessing
-        # def _set_config_for_preprocessor(p: ConfigOr) -> ConfigOr:
-        #     return maybe_set_config(
-        #         p,
-        #         vocab_cfg=vocab_cfg,
-        #         max_sequence_length=max_sequence_length,
-        #         replace_newlines_with=replace_newlines_with,
-        #     )
+        # Apply preprocessing after mixing if configured
+        if pack_after_mixing:
+            if isinstance(preprocessor, list):
+                raise ValueError("Cannot use multiple preprocessors when pack_after_mixing=True.")
 
-        # if isinstance(preprocessor, list):
-        #     assert len(preprocessor) == len(data_mixture_components)
-        #     processor_cfg = _set_config_for_preprocessor(preprocessor[len(sources)])
-        # else:
-        #     processor_cfg = _set_config_for_preprocessor(preprocessor)
+            processor_cfg = _set_config_for_preprocessor(preprocessor)
+            processor_fn = maybe_instantiate(processor_cfg)
+            mixed_ds = processor_fn(mixed_ds)
 
-        # # Apply processor to the source dataset
-        # processor_fn = maybe_instantiate(processor_cfg)
-        # mixed_ds = processor_fn(mixed_ds)
+            mixed_ds = grain.experimental.ThreadPrefetchIterDataset(parent=mixed_ds, prefetch_buffer_size=128)
+            mixed_ds = mixed_ds.batch(gbs)
+            # When using this, num_threads must be equal to or greater than the num_workers below. Not sure why exactly.
+            from grain.experimental import multithread_prefetch
+            mixed_ds = multithread_prefetch(
+                mixed_ds,
+                num_threads=32,
+                buffer_size=16,
+                sequential_slice=True,
+            )
+            # mixed_ds = grain.experimental.ThreadPrefetchIterDataset(parent=mixed_ds, prefetch_buffer_size=16)
+            mixed_ds = prefetch_dataset(
+                mixed_ds,
+                multiprocessing_options=grain.MultiprocessingOptions(
+                    num_workers=32,
+                    per_worker_buffer_size=4,
+                    enable_profiling=False,
+                ),
+            )
+        else:
+            mixed_ds = mixed_ds.batch(gbs)
+            mixed_ds = grain.experimental.ThreadPrefetchIterDataset(parent=mixed_ds, prefetch_buffer_size=16)
 
-        # Shard the mixed dataset
-        gbs = dispatch_config.batch_size
-        if gbs is None:
-            logging.warning("Batch size is not specified, using %d devices.", len(jax.devices()))
-            gbs = len(jax.devices())
-        logging.info("Batch size: %d", gbs)
-        # mixed_ds = prefetch_dataset(
-        #     mixed_ds,
-        #     multiprocessing_options=grain.MultiprocessingOptions(
-        #         num_workers=16,
-        #         per_worker_buffer_size=(gbs * 4),
-        #         enable_profiling=True,
-        #     ),
-        # )
-        mixed_ds = grain.experimental.ThreadPrefetchIterDataset(parent=mixed_ds, prefetch_buffer_size=128)
-        mixed_ds = mixed_ds.batch(gbs)
-        # When using this, num_threads must be equal to or greater than the num_workers below. Not sure why exactly.
-        from grain.experimental import multithread_prefetch
-        mixed_ds = multithread_prefetch(
-            mixed_ds,
-            num_threads=32,
-            buffer_size=16,
-            sequential_slice=True,
-        )
-        # mixed_ds = grain.experimental.ThreadPrefetchIterDataset(parent=mixed_ds, prefetch_buffer_size=16)
-        mixed_ds = prefetch_dataset(
-            mixed_ds,
-            multiprocessing_options=grain.MultiprocessingOptions(
-                num_workers=32,
-                per_worker_buffer_size=4,
-                enable_profiling=False,
-            ),
-        )
-        # mixed_ds = grain.experimental.ThreadPrefetchDatasetIterator(parent=mixed_ds, prefetch_buffer_size=4)
-        # mixed_ds.start_prefetch()
         return mixed_ds
 
     return build_dataset_fn
